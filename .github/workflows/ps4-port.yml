@@ -1,0 +1,29 @@
+name: PS4 port guardrails
+
+on:
+  push:
+    branches: ["codex/ps4-port"]
+  pull_request:
+
+jobs:
+  source-audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python tools/audit_ps4_port.py
+      - run: |
+          cat > /tmp/platform_smoke.cpp <<'CPP'
+          #include "platform.hpp"
+          #include <string_view>
+          int main() {
+            using namespace std::literals;
+            return sx::platform::name == "PS4"sv &&
+                           sx::platform::product == "Stremio-PS4"sv
+                       ? 0 : 1;
+          }
+          CPP
+          c++ -std=c++20 -DPLATFORM_PS4=1 -Isrc /tmp/platform_smoke.cpp -o /tmp/platform_smoke
+          /tmp/platform_smoke

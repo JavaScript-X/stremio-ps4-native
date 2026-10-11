@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "../platform.hpp"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -414,7 +415,7 @@ void send_ext_handshake(Peer* p) {
 	m.d["ut_metadata"] = BValue(int64_t(kExtMetadata));
 	m.d["ut_pex"] = BValue(int64_t(kExtPex));
 	d.d["m"] = m;
-	d.d["v"] = BValue(std::string("Stremio PS5"));
+	d.d["v"] = BValue(std::string(sx::platform::product));
 	d.d["reqq"] = BValue(int64_t(500));
 	send_ext(p, 0, bencode(d));
 }
@@ -1688,9 +1689,9 @@ void map_port() {
 	}
 	std::string ps = std::to_string(port);
 	int tcp = UPNP_AddPortMapping(urls.controlURL, data.first.servicetype, ps.c_str(), ps.c_str(), lan,
-	                              "Stremio PS5", "TCP", nullptr, "0");
+	                              sx::platform::product, "TCP", nullptr, "0");
 	int udp = UPNP_AddPortMapping(urls.controlURL, data.first.servicetype, ps.c_str(), ps.c_str(), lan,
-	                              "Stremio PS5", "UDP", nullptr, "0");
+	                              sx::platform::product, "UDP", nullptr, "0");
 	dlog("upnp: port %d forwarded to %s: TCP %s, UDP %s", port, lan, tcp == 0 ? "ok" : strupnperror(tcp),
 	     udp == 0 ? "ok" : strupnperror(udp));
 	if (tcp == 0) {

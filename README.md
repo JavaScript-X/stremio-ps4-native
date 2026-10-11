@@ -1,4 +1,16 @@
-# Unofficial Stremio PS5 Port
+# Stremio PS4 Native Port
+
+> **Development branch:** this is an independent PS4 port of the upstream
+> GPL-3.0 PS5 client. It does not use code from `JavaScript-X/stremio-ps4` or
+> any other JavaScript-X project. There is no installable PS4 package yet; the
+> honest implementation status and hardware acceptance gates are tracked in
+> [PORTING.md](PORTING.md) and [ps4/README.md](ps4/README.md).
+
+The upstream PS5 documentation is retained below while features are moved to
+the PS4 platform layer. PS5 installation instructions and artifacts do not
+apply to this branch.
+
+## Upstream PS5 documentation
 
 [![Support me on Ko-fi](https://img.shields.io/badge/Ko--fi-Support_this_project-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/sp9nky)
 [![Join the beta on Discord](https://img.shields.io/badge/Discord-Join_the_beta-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/fJzFmvFqVf)

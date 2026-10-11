@@ -1,10 +1,11 @@
 #include "http.h"
+#include "platform.hpp"
 
 #include <curl/curl.h>
 
 #include "util.h"
 
-const char* kUserAgent = "Mozilla/5.0 (PlayStation; PlayStation 5/1.00) Stremio-PS5/1.0";
+const char* kUserAgent = sx::platform::user_agent;
 
 static std::string g_ca_bundle;
 
