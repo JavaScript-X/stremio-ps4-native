@@ -6,6 +6,7 @@
 # This builds the P1 bootstrap only. It is deliberately not named as a release
 # and must not be distributed as a feature-complete Stremio client.
 
+BUILD_MODE  ?= bootstrap
 TITLE       := Stremio PS4 (Bring-up)
 VERSION     := 0.03
 TITLE_ID    := BREW00991
@@ -24,14 +25,25 @@ LIBS        := -lc -lkernel -lc++ -lSceSysmodule \
 	-lSceSystemService -lScePigletv2VSH \
 	-lSceUserService -lScePad
 EXTRAFLAGS  := -std=c++20 -O2 -fexceptions -fcxx-exceptions -DPLATFORM_PS4=1
+
+ifeq ($(BUILD_MODE),probe)
+TITLE       := Stremio PS4 (Loader Probe)
+VERSION     := 0.04
+SOURCE      := probe/main.c
+OBJECT      := $(OBJDIR)/probe.o
+LIBS        := -lc -lkernel -lSceSystemService
+EXTRAFLAGS  := -O2 -DPLATFORM_PS4=1
+endif
 AUTHINFO    := "000000000000000000000000001C004000FF000000000080000000000000000000000000000000000000008000400040000000000000008000000000000000080040FFFF000000F000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Linux)
+	CC   := $(shell command -v clang 2>/dev/null || command -v clang-18 2>/dev/null)
 	CCX  := $(shell command -v clang++ 2>/dev/null || command -v clang++-18 2>/dev/null)
 	LD   := $(shell command -v ld.lld 2>/dev/null || command -v ld.lld-18 2>/dev/null)
 HOST := linux
 else ifeq ($(UNAME_S),Darwin)
+	CC   := /usr/local/opt/llvm/bin/clang
 CCX  := /usr/local/opt/llvm/bin/clang++
 LD   := /usr/local/opt/llvm/bin/ld.lld
 HOST := macos
@@ -40,9 +52,9 @@ $(error Build under Linux/WSL or macOS; Windows OpenOrbis packaging is not wired
 endif
 
 TOOLS       := $(TOOLCHAIN)/bin/$(HOST)
-CXXFLAGS    := --target=x86_64-pc-freebsd12-elf -fPIC -funwind-tables -c \
-	$(EXTRAFLAGS) -isysroot $(TOOLCHAIN) -isystem $(TOOLCHAIN)/include \
-	-isystem $(TOOLCHAIN)/include/c++/v1 -I$(ROOT)/src
+CFLAGS      := --target=x86_64-pc-freebsd12-elf -fPIC -funwind-tables -c \
+	$(EXTRAFLAGS) -isysroot $(TOOLCHAIN) -isystem $(TOOLCHAIN)/include -I$(ROOT)/src
+CXXFLAGS    := $(CFLAGS) -isystem $(TOOLCHAIN)/include/c++/v1
 LDFLAGS     := -m elf_x86_64 -pie --script $(TOOLCHAIN)/link.x --eh-frame-hdr \
 	-L$(TOOLCHAIN)/lib $(LIBS) $(TOOLCHAIN)/lib/crt1.o
 PKG         := $(DIST)/$(CONTENT_ID).pkg
@@ -58,7 +70,7 @@ $(OBJDIR):
 	mkdir -p $@
 
 $(OBJECT): $(SOURCE) | $(OBJDIR)
-	$(CCX) $(CXXFLAGS) -o $@ $<
+	$(if $(filter %.c,$<),$(CC),$(CCX)) $(if $(filter %.c,$<),$(CFLAGS),$(CXXFLAGS)) -o $@ $<
 
 $(BUILD)/bootstrap.elf: $(OBJECT)
 	$(LD) $< -o $@ $(LDFLAGS)

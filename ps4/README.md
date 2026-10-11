@@ -22,6 +22,19 @@ cd ps4
 make
 ```
 
+For a minimal loader-isolation package with no graphics, controller,
+filesystem or C++ dependencies:
+
+```sh
+make BUILD_MODE=probe
+```
+
+The loader probe is version 0.04 and intentionally remains on a black screen.
+If it stays open, the package and executable loader are compatible and the
+fault is inside the Piglet path. If it still reports `CE-34878-0`, the issue is
+below the application code (firmware/homebrew loader, FSELF or package
+compatibility).
+
 The output is `dist-ps4/IV0000-BREW00991_00-STREMIOPS4000000.pkg`.
 It is a bring-up build, not the Stremio application: on compatible jailbroken
 hardware it should open a purple 1080p Piglet surface, initialize a DualShock 4,
