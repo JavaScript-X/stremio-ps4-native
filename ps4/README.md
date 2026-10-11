@@ -35,6 +35,16 @@ fault is inside the Piglet path. If it still reports `CE-34878-0`, the issue is
 below the application code (firmware/homebrew loader, FSELF or package
 compatibility).
 
+Firmware 13.02 with GoldHEN 2.4b18.12 passes that loader probe. Piglet/EGL is
+therefore excluded from the PS4 port. Build the direct framebuffer probe with:
+
+```sh
+make BUILD_MODE=videoout
+```
+
+Version 0.06 uses only `libSceVideoOut` and direct memory. A successful hardware
+test displays a solid Stremio-purple 1080p frame and remains open.
+
 The output is `dist-ps4/IV0000-BREW00991_00-STREMIOPS4000000.pkg`.
 It is a bring-up build, not the Stremio application: on compatible jailbroken
 hardware it should open a purple 1080p Piglet surface, initialize a DualShock 4,
