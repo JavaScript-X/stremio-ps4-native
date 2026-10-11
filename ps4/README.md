@@ -27,12 +27,11 @@ It is a bring-up build, not the Stremio application: on compatible jailbroken
 hardware it should open a purple 1080p Piglet surface, initialize a DualShock 4,
 append diagnostics to `/data/stremio-ps4/boot.log`, and exit with Circle.
 
-The bootstrap has been compiled, linked, converted to an `eboot.bin`, and
-packaged successfully with OpenOrbis. The resulting development PKG was
-6,619,136 bytes with SHA-256
-`13e5184c358e64e87675e07f1809b83f5e57e2ec4f32653559c78a7f93b5f43a`.
-This verifies the build pipeline only; real-hardware boot validation remains
-required.
+Version 0.02 parks on startup failure instead of returning into the PS4 crash
+reporter, logs the failing stage and error code, tolerates the optional shader
+module during this clear-screen probe, and closes through System Service rather
+than returning from `main()`. If it does not reach the purple screen, retrieve
+`/data/stremio-ps4/boot.log` over FTP before closing the title.
 
 ## Port status
 

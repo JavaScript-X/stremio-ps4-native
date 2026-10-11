@@ -19,6 +19,8 @@
 #include <orbis/Pad.h>
 #include <orbis/UserService.h>
 
+extern "C" std::size_t sceLibcHeapSize = 64 * 1024 * 1024;
+
 namespace
 {
 constexpr int kWidth = 1920;
@@ -38,6 +40,21 @@ void log_line(const char *message)
     }
 }
 
+void log_code(const char *stage, int code)
+{
+    char line[160]{};
+    std::snprintf(line, sizeof(line), "%s: 0x%08x", stage, static_cast<unsigned>(code));
+    log_line(line);
+}
+
+[[noreturn]] void stop_with_error(const char *stage, int code)
+{
+    log_code(stage, code);
+    log_line("startup stopped; title parked to preserve diagnostics");
+    for (;;)
+        sceKernelUsleep(100000);
+}
+
 bool load_piglet_modules(int &piglet, int &shaders)
 {
     const char *sandbox = sceKernelGetFsSandboxRandomWord();
@@ -55,15 +72,17 @@ bool load_piglet_modules(int &piglet, int &shaders)
         piglet_path, 0, nullptr, 0, nullptr, &module_result));
     if (piglet < 0)
     {
-        log_line("cannot load libScePigletv2VSH");
+        log_code("cannot load libScePigletv2VSH", piglet);
         return false;
     }
     shaders = static_cast<int>(sceKernelLoadStartModule(
         shaders_path, 0, nullptr, 0, nullptr, &module_result));
     if (shaders < 0)
     {
-        log_line("cannot load libScePrecompiledShaders");
-        return false;
+        // The bootstrap clears the framebuffer and uses no shader. Older
+        // firmwares may not expose this optional module, so record it and keep
+        // going. The full UI renderer will require a separate shader strategy.
+        log_code("optional libScePrecompiledShaders unavailable", shaders);
     }
     return true;
 }
@@ -74,9 +93,10 @@ bool create_display(EGLDisplay &display, EGLSurface &surface, EGLContext &contex
     pgl.size = sizeof(pgl);
     pgl.flags = ORBIS_PGL_FLAGS_USE_COMPOSITE_EXT | ORBIS_PGL_FLAGS_USE_FLEXIBLE_MEMORY | 0x60;
     pgl.processOrder = 1;
-    pgl.systemSharedMemorySize = 128 * 1024 * 1024;
-    pgl.videoSharedMemorySize = 256 * 1024 * 1024;
-    pgl.maxMappedFlexibleMemory = 96 * 1024 * 1024;
+    // Match the known-good OpenOrbis Piglet sample during bring-up.
+    pgl.systemSharedMemorySize = 250 * 1024 * 1024;
+    pgl.videoSharedMemorySize = 512 * 1024 * 1024;
+    pgl.maxMappedFlexibleMemory = 170 * 1024 * 1024;
     pgl.drawCommandBufferSize = 1 * 1024 * 1024;
     pgl.lcueResourceBufferSize = 1 * 1024 * 1024;
     pgl.dbgPosCmd_0x40 = kWidth;
@@ -107,7 +127,7 @@ bool create_display(EGLDisplay &display, EGLSurface &surface, EGLContext &contex
     if (surface == EGL_NO_SURFACE || context == EGL_NO_CONTEXT ||
         !eglMakeCurrent(display, surface, surface, context))
         return false;
-    eglSwapInterval(display, 1);
+    eglSwapInterval(display, 0);
     return true;
 }
 
@@ -134,52 +154,56 @@ int main()
 
     int piglet = -1, shaders = -1;
     if (!load_piglet_modules(piglet, shaders))
-        return 10;
+        stop_with_error("Piglet module stage failed", piglet);
+    log_line("Piglet module stage ready");
 
     EGLDisplay display = EGL_NO_DISPLAY;
     EGLSurface surface = EGL_NO_SURFACE;
     EGLContext context = EGL_NO_CONTEXT;
     if (!create_display(display, surface, context))
-    {
-        log_line("Piglet/EGL display creation failed");
-        return 11;
-    }
+        stop_with_error("Piglet/EGL display creation failed", eglGetError());
+    log_line("Piglet/EGL display ready");
 
     sceSysmoduleLoadModuleInternal(ORBIS_SYSMODULE_INTERNAL_SYSTEM_SERVICE);
-    sceSystemServiceHideSplashScreen();
     const int pad = open_pad();
     if (pad < 0)
-    {
-        log_line("DualShock 4 open failed");
-        return 12;
-    }
+        log_code("DualShock 4 unavailable; display test continues", pad);
 
-    log_line("display and controller ready; Circle exits");
+    log_line("entering frame loop; Circle exits when a pad is available");
     bool running = true;
+    bool first_frame = true;
     while (running)
     {
         OrbisPadData state{};
-        if (scePadReadState(pad, &state) == 0 && (state.buttons & ORBIS_PAD_BUTTON_CIRCLE))
+        if (pad >= 0 && scePadReadState(pad, &state) == 0 && (state.buttons & ORBIS_PAD_BUTTON_CIRCLE))
             running = false;
 
         glViewport(0, 0, kWidth, kHeight);
         glClearColor(0.16f, 0.06f, 0.28f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
         if (!eglSwapBuffers(display, surface))
+            stop_with_error("eglSwapBuffers failed", eglGetError());
+        if (first_frame)
         {
-            log_line("eglSwapBuffers failed");
-            break;
+            first_frame = false;
+            sceSystemServiceHideSplashScreen();
+            log_line("first frame presented");
         }
         sceKernelUsleep(1000);
     }
 
     log_line("clean shutdown");
-    scePadClose(pad);
+    if (pad >= 0)
+        scePadClose(pad);
     eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
     eglDestroyContext(display, context);
     eglDestroySurface(display, surface);
     eglTerminate(display);
     if (g_log)
         std::fclose(g_log);
-    return 0;
+    // Returning from main commonly opens the PS4 crash reporter for homebrew
+    // titles. Ask the shell to close us, and park if that request is refused.
+    sceSystemServiceLoadExec("exit", nullptr);
+    for (;;)
+        sceKernelUsleep(100000);
 }
