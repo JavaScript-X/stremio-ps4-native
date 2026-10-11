@@ -337,7 +337,3 @@ developers; thank you to all of them:
 
 See [THIRD_PARTY.md](THIRD_PARTY.md) for every component, where it is used and
 its license.
-
-## Note
-
-This project is vibe coded: it was built with the help of AI.

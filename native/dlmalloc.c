@@ -6233,7 +6233,7 @@ History:
       * More precautions for cases where other routines call sbrk,
         courtesy of Wolfram Gloger (Gloger@lrz.uni-muenchen.de).
       * Added macros etc., allowing use in linux libc from
-        H.J. Lu (hjl@gnu.ai.mit.edu)
+        H.J. Lu
       * Inverted this history list
 
     V2.6.1 Sat Dec  2 14:10:57 1995  Doug Lea  (dl at gee)

@@ -2,7 +2,7 @@ name: PS4 port guardrails
 
 on:
   push:
-    branches: ["codex/ps4-port"]
+    branches: ["ps4-port"]
   pull_request:
 
 jobs:
