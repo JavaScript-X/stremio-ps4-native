@@ -1,5 +1,7 @@
 # Build output (build.sh writes dist/; release files go to GitHub Releases)
 dist/
+dist-ps4/
+ps4/build/
 dist-native/
 build/
 *.ffpfsc

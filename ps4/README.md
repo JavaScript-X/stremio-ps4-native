@@ -12,6 +12,28 @@ from `JavaScript-X/stremio-ps4` or any other JavaScript-X repository.
 - Fake PKG installation
 - 1920x1080 UI (PS4 Pro 4K output is a later, separately tested target)
 
+## Build the P1 bootstrap
+
+Install the public OpenOrbis PS4 Toolchain, then from WSL/Linux:
+
+```sh
+export OO_PS4_TOOLCHAIN=/opt/OpenOrbis/PS4Toolchain
+cd ps4
+make
+```
+
+The output is `dist-ps4/IV0000-BREW00991_00-STREMIOPS4000000.pkg`.
+It is a bring-up build, not the Stremio application: on compatible jailbroken
+hardware it should open a purple 1080p Piglet surface, initialize a DualShock 4,
+append diagnostics to `/data/stremio-ps4/boot.log`, and exit with Circle.
+
+The bootstrap has been compiled, linked, converted to an `eboot.bin`, and
+packaged successfully with OpenOrbis. The resulting development PKG was
+6,619,136 bytes with SHA-256
+`13e5184c358e64e87675e07f1809b83f5e57e2ec4f32653559c78a7f93b5f43a`.
+This verifies the build pipeline only; real-hardware boot validation remains
+required.
+
 ## Port status
 
 The common application code now has an explicit PS4 identity and is protected
@@ -20,9 +42,9 @@ before the app can be called installable or feature complete:
 
 | Area | PS5 implementation | PS4 replacement | Status |
 | --- | --- | --- | --- |
-| Package | `.ffpfsc`, PS5 param JSON | OpenOrbis fake PKG/SFO | pending |
-| GPU/UI | PS5 OpenGL over AGC | Piglet/OpenGL ES or OpenGNM | pending |
-| Input | DualSense `libScePad` | DualShock 4 `libScePad` | pending |
+| Package | `.ffpfsc`, PS5 param JSON | OpenOrbis fake PKG/SFO | bring-up implementation |
+| GPU/UI | PS5 OpenGL over AGC | Piglet/OpenGL ES or OpenGNM | EGL bring-up implementation |
+| Input | DualSense `libScePad` | DualShock 4 `libScePad` | bring-up implementation |
 | Keyboard | PS5 IME dialog | PS4 IME dialog | pending |
 | Audio | PS5 `libSceAudioOut` | PS4 `libSceAudioOut` | pending |
 | Video | `libSceVideodec2` | `libSceAvPlayer`/PS4 decoder | pending |

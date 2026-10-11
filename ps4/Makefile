@@ -1,0 +1,101 @@
+# OpenOrbis PS4 bring-up package. Run from this directory under Linux/WSL:
+#
+#   export OO_PS4_TOOLCHAIN=/opt/OpenOrbis/PS4Toolchain
+#   make
+#
+# This builds the P1 bootstrap only. It is deliberately not named as a release
+# and must not be distributed as a feature-complete Stremio client.
+
+TITLE       := Stremio PS4 (Bring-up)
+VERSION     := 0.01
+TITLE_ID    := BREW00991
+CONTENT_ID  := IV0000-BREW00991_00-STREMIOPS4000000
+
+TOOLCHAIN   := $(OO_PS4_TOOLCHAIN)
+ROOT        := $(abspath ..)
+BUILD       := $(CURDIR)/build
+OBJDIR      := $(BUILD)/obj
+STAGE       := $(BUILD)/stage
+DIST        := $(ROOT)/dist-ps4
+SOURCE      := bootstrap/main.cpp
+OBJECT      := $(OBJDIR)/main.o
+
+LIBS        := -lc -lkernel -lc++ -lSceShellCoreUtil -lSceSysmodule \
+	-lSceSystemService -lScePigletv2VSH -lScePrecompiledShaders \
+	-lSceUserService -lScePad
+EXTRAFLAGS  := -std=c++20 -O2 -fexceptions -fcxx-exceptions -DPLATFORM_PS4=1
+AUTHINFO    := "000000000000000000000000001C004000FF000000000080000000000000000000000000000000000000008000400040000000000000008000000000000000080040FFFF000000F000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Linux)
+	CCX  := $(shell command -v clang++ 2>/dev/null || command -v clang++-18 2>/dev/null)
+	LD   := $(shell command -v ld.lld 2>/dev/null || command -v ld.lld-18 2>/dev/null)
+HOST := linux
+else ifeq ($(UNAME_S),Darwin)
+CCX  := /usr/local/opt/llvm/bin/clang++
+LD   := /usr/local/opt/llvm/bin/ld.lld
+HOST := macos
+else
+$(error Build under Linux/WSL or macOS; Windows OpenOrbis packaging is not wired yet)
+endif
+
+TOOLS       := $(TOOLCHAIN)/bin/$(HOST)
+CXXFLAGS    := --target=x86_64-pc-freebsd12-elf -fPIC -funwind-tables -c \
+	$(EXTRAFLAGS) -isysroot $(TOOLCHAIN) -isystem $(TOOLCHAIN)/include \
+	-isystem $(TOOLCHAIN)/include/c++/v1 -I$(ROOT)/src
+LDFLAGS     := -m elf_x86_64 -pie --script $(TOOLCHAIN)/link.x --eh-frame-hdr \
+	-L$(TOOLCHAIN)/lib $(LIBS) $(TOOLCHAIN)/lib/crt1.o
+PKG         := $(DIST)/$(CONTENT_ID).pkg
+
+.PHONY: all check-toolchain clean
+all: check-toolchain $(PKG)
+
+check-toolchain:
+	@test -n "$(TOOLCHAIN)" || (echo "OO_PS4_TOOLCHAIN is not set"; exit 1)
+	@test -f "$(TOOLCHAIN)/link.x" || (echo "Invalid OpenOrbis toolchain: $(TOOLCHAIN)"; exit 1)
+
+$(OBJDIR):
+	mkdir -p $@
+
+$(OBJECT): $(SOURCE) | $(OBJDIR)
+	$(CCX) $(CXXFLAGS) -o $@ $<
+
+$(BUILD)/bootstrap.elf: $(OBJECT)
+	$(LD) $< -o $@ $(LDFLAGS)
+
+$(BUILD)/eboot.bin: $(BUILD)/bootstrap.elf
+	$(TOOLS)/create-fself -in=$< -out=$(BUILD)/bootstrap.oelf \
+		--eboot "$@" --paid 0x3800000000000035 --authinfo $(AUTHINFO)
+
+$(STAGE)/sce_sys/param.sfo: Makefile
+	mkdir -p $(STAGE)/sce_sys
+	$(TOOLS)/PkgTool.Core sfo_new $@
+	$(TOOLS)/PkgTool.Core sfo_setentry $@ APP_TYPE --type Integer --maxsize 4 --value 1
+	$(TOOLS)/PkgTool.Core sfo_setentry $@ APP_VER --type Utf8 --maxsize 8 --value '$(VERSION)'
+	$(TOOLS)/PkgTool.Core sfo_setentry $@ ATTRIBUTE --type Integer --maxsize 4 --value 0
+	$(TOOLS)/PkgTool.Core sfo_setentry $@ CATEGORY --type Utf8 --maxsize 4 --value 'gde'
+	$(TOOLS)/PkgTool.Core sfo_setentry $@ FORMAT --type Utf8 --maxsize 4 --value 'obs'
+	$(TOOLS)/PkgTool.Core sfo_setentry $@ CONTENT_ID --type Utf8 --maxsize 48 --value '$(CONTENT_ID)'
+	$(TOOLS)/PkgTool.Core sfo_setentry $@ DOWNLOAD_DATA_SIZE --type Integer --maxsize 4 --value 0
+	$(TOOLS)/PkgTool.Core sfo_setentry $@ SYSTEM_VER --type Integer --maxsize 4 --value 0
+	$(TOOLS)/PkgTool.Core sfo_setentry $@ TITLE --type Utf8 --maxsize 128 --value '$(TITLE)'
+	$(TOOLS)/PkgTool.Core sfo_setentry $@ TITLE_ID --type Utf8 --maxsize 12 --value '$(TITLE_ID)'
+	$(TOOLS)/PkgTool.Core sfo_setentry $@ VERSION --type Utf8 --maxsize 8 --value '$(VERSION)'
+
+$(STAGE)/.ready: $(BUILD)/eboot.bin $(STAGE)/sce_sys/param.sfo $(ROOT)/app/sce_sys/icon0.png
+	mkdir -p $(STAGE)/sce_module $(STAGE)/sce_sys/about
+	cp $(BUILD)/eboot.bin $(STAGE)/eboot.bin
+	cp $(ROOT)/app/sce_sys/icon0.png $(STAGE)/sce_sys/icon0.png
+	cp $(TOOLCHAIN)/samples/piglet/sce_module/libc.prx $(STAGE)/sce_module/libc.prx
+	cp $(TOOLCHAIN)/samples/piglet/sce_module/libSceFios2.prx $(STAGE)/sce_module/libSceFios2.prx
+	cp $(TOOLCHAIN)/samples/piglet/sce_sys/about/right.sprx $(STAGE)/sce_sys/about/right.sprx
+	touch $@
+
+$(PKG): $(STAGE)/.ready
+	mkdir -p $(DIST)
+	cd $(STAGE) && $(TOOLS)/create-gp4 -out pkg.gp4 --content-id=$(CONTENT_ID) \
+		--files "eboot.bin sce_module/libc.prx sce_module/libSceFios2.prx sce_sys/about/right.sprx sce_sys/param.sfo sce_sys/icon0.png"
+	cd $(STAGE) && $(TOOLS)/PkgTool.Core pkg_build pkg.gp4 $(DIST)
+
+clean:
+	rm -rf $(BUILD) $(DIST)

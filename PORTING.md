@@ -58,3 +58,11 @@ history.
 - A base PS4 has much less CPU headroom than PS5. Torrent hashing, software
   decoding, image decode and UI uploads need profiling together, not in
   isolation.
+
+## P1 bring-up implementation
+
+`ps4/Makefile` and `ps4/bootstrap/main.cpp` now implement the first hardware
+probe: OpenOrbis fake-PKG generation, a 1080p Piglet/EGL surface, DualShock 4
+input, persistent logging and clean Circle-button exit. P1 remains incomplete
+until that package has been built with OpenOrbis and exercised on real hardware;
+the existing PS5 HUI renderer is not connected to this bootstrap yet.
