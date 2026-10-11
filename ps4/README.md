@@ -42,8 +42,11 @@ therefore excluded from the PS4 port. Build the direct framebuffer probe with:
 make BUILD_MODE=videoout
 ```
 
-Version 0.06 uses only `libSceVideoOut` and direct memory. A successful hardware
-test displays a solid Stremio-purple 1080p frame and remains open.
+Version 0.06 displayed a stable Stremio-purple 1080p frame on firmware 13.02
+with GoldHEN 2.4b18.12, validating direct VideoOut and confirming Piglet as the
+old crash boundary. Version 0.07 adds DualShock 4 validation: Cross toggles the
+screen between two purple shades and Circle closes the title through System
+Service.
 
 The output is `dist-ps4/IV0000-BREW00991_00-STREMIOPS4000000.pkg`.
 It is a bring-up build, not the Stremio application: on compatible jailbroken

@@ -61,8 +61,9 @@ history.
 
 ## P1 bring-up implementation
 
-`ps4/Makefile` and `ps4/bootstrap/main.cpp` now implement the first hardware
-probe: OpenOrbis fake-PKG generation, a 1080p Piglet/EGL surface, DualShock 4
-input, persistent logging and clean Circle-button exit. P1 remains incomplete
-until that package has been built with OpenOrbis and exercised on real hardware;
-the existing PS5 HUI renderer is not connected to this bootstrap yet.
+The OpenOrbis fake-PKG and generic application FSELF are hardware validated on
+firmware 13.02 with GoldHEN 2.4b18.12. The loader probe and direct 1080p
+`libSceVideoOut` framebuffer remain stable. Piglet/EGL crashes before presenting
+a frame in that environment, so the PS4 renderer will use VideoOut (or an
+OpenGNM backend built on it), not Piglet. The existing PS5 HUI renderer is not
+connected to this backend yet.
