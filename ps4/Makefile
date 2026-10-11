@@ -7,7 +7,7 @@
 # and must not be distributed as a feature-complete Stremio client.
 
 TITLE       := Stremio PS4 (Bring-up)
-VERSION     := 0.02
+VERSION     := 0.03
 TITLE_ID    := BREW00991
 CONTENT_ID  := IV0000-BREW00991_00-STREMIOPS4000000
 
@@ -20,8 +20,8 @@ DIST        := $(ROOT)/dist-ps4
 SOURCE      := bootstrap/main.cpp
 OBJECT      := $(OBJDIR)/main.o
 
-LIBS        := -lc -lkernel -lc++ -lSceShellCoreUtil -lSceSysmodule \
-	-lSceSystemService -lScePigletv2VSH -lScePrecompiledShaders \
+LIBS        := -lc -lkernel -lc++ -lSceSysmodule \
+	-lSceSystemService -lScePigletv2VSH \
 	-lSceUserService -lScePad
 EXTRAFLAGS  := -std=c++20 -O2 -fexceptions -fcxx-exceptions -DPLATFORM_PS4=1
 AUTHINFO    := "000000000000000000000000001C004000FF000000000080000000000000000000000000000000000000008000400040000000000000008000000000000000080040FFFF000000F000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"

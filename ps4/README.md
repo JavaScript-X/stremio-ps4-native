@@ -27,10 +27,12 @@ It is a bring-up build, not the Stremio application: on compatible jailbroken
 hardware it should open a purple 1080p Piglet surface, initialize a DualShock 4,
 append diagnostics to `/data/stremio-ps4/boot.log`, and exit with Circle.
 
-Version 0.02 parks on startup failure instead of returning into the PS4 crash
+Version 0.03 parks on startup failure instead of returning into the PS4 crash
 reporter, logs the failing stage and error code, tolerates the optional shader
 module during this clear-screen probe, and closes through System Service rather
-than returning from `main()`. If it does not reach the purple screen, retrieve
+than returning from `main()`. It also removes unused `libSceShellCoreUtil` and
+`libScePrecompiledShaders` loader imports so firmware without those exports can
+still enter `main()`. If it does not reach the purple screen, retrieve
 `/data/stremio-ps4/boot.log` over FTP before closing the title.
 
 ## Port status
