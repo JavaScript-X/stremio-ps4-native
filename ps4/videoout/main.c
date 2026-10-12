@@ -89,7 +89,11 @@ static void load_live_catalog(void){
     // redirects by default, so use the canonical catalog host from Location.
     unsigned char *json=http_get("https://cinemeta-catalogs.strem.io/top/catalog/movie/top.json",2*1024*1024,&size);
     if(!json){catalog_status=4;return;}int count=parse_catalog((char*)json);free(json);if(count==0){catalog_status=5;return;}
-    for(int i=0;i<count;++i){size_t image_size=0;unsigned char *encoded=http_get(live_cards[i].poster_url,3*1024*1024,&image_size);
+    for(int i=0;i<count;++i){size_t image_size=0;
+        // The extensionless endpoint can redirect or return WebP. Its JPEG
+        // representation is direct and supported by the native decoder.
+        if(strlen(live_cards[i].poster_url)+4<sizeof(live_cards[i].poster_url))strcat(live_cards[i].poster_url,".jpg");
+        unsigned char *encoded=http_get(live_cards[i].poster_url,3*1024*1024,&image_size);
         if(encoded){int channels=0;live_cards[i].poster.pixels=stbi_load_from_memory(encoded,(int)image_size,&live_cards[i].poster.width,&live_cards[i].poster.height,&channels,4);
             if(live_cards[i].poster.pixels)++poster_count;free(encoded);}}
     catalog_status=2;
@@ -154,8 +158,8 @@ static void draw_card(void *b,int x,int y,int w,int h,int seed,int focused,const
     static const uint32_t colors[]={0xff7c304fu,0xff735239u,0xff3b626eu,0xff71415eu,0xff4c3978u};
     draw_rect(b,x,y,w,h,colors[seed%5]);
     if(catalog_status==2&&live_cards[seed%5].poster.pixels)draw_image(b,&live_cards[seed%5].poster,x,y,w,h-70);
-    draw_rect(b,x,y+h-70,w,70,0xff1a151cu);
-    draw_text(b,x+14,y+h-48,title,3,INK);if(focused)draw_focus(b,x,y,w,h);
+    draw_rect(b,x,y+h-70,w,70,0xff1a151cu);char shown[14]={0};strncpy(shown,title,sizeof(shown)-1);
+    draw_text(b,x+14,y+h-48,shown,3,INK);if(focused)draw_focus(b,x,y,w,h);
 }
 static void draw_rail(void *b,const AppState *s){
     draw_rect(b,0,0,140,HEIGHT,0xff171117u);if(logo.pixels)draw_image(b,&logo,42,30,58,58);else draw_text(b,36,42,"S",7,ACCENT_SOFT);
@@ -173,7 +177,7 @@ static void draw_board(void *b,const AppState *s){
     draw_text(b,190,154,"POPULAR NOW",6,INK);draw_text(b,190,220,"MOVIES AND SERIES FROM YOUR ADDONS",3,INK_2);
     const char *titles[]={"FEATURED","TRENDING","MOVIES","SERIES","RECENT"};
     for(int i=0;i<5;++i)draw_card(b,190+i*290,300,250,360,i,!s->rail_focus&&s->row==0&&s->column==i,catalog_status==2?live_cards[i].name:titles[i]);
-    const char *status=catalog_status==1?"CONNECTING":catalog_status==2?(poster_count?"LIVE CINEMETA POSTERS":"LIVE CINEMETA"):
+    const char *status=catalog_status==1?"CONNECTING":catalog_status==2?(poster_count==5?"LIVE CINEMETA POSTERS":poster_count?"PARTIAL POSTERS":"LIVE CINEMETA"):
         catalog_status==3?"NETWORK INIT FAILED":catalog_status==4?"CATALOG REQUEST FAILED":catalog_status==5?"CATALOG PARSE FAILED":"OFFLINE CONTENT";
     draw_text(b,1030,220,status,3,catalog_status==2?ACCENT_SOFT:INK_3);
     draw_text(b,190,728,"CONTINUE WATCHING",5,INK);
@@ -184,7 +188,7 @@ static void draw_discover(void *b,const AppState *s){
     draw_text(b,190,154,"DISCOVER",7,INK);const char *filters[]={"MOVIES","POPULAR","ALL GENRES"};
     for(int i=0;i<3;++i){draw_rect(b,190+i*330,238,300,66,i==0?ACCENT:SURFACE);draw_text(b,214+i*330,258,filters[i],3,INK);}
     const char *titles[]={"ACTION","DRAMA","COMEDY","THRILLER","FAMILY"};
-    for(int i=0;i<5;++i)draw_card(b,190+i*290,370,250,360,i+2,!s->rail_focus&&s->column==i,titles[i]);
+    for(int i=0;i<5;++i)draw_card(b,190+i*290,370,250,360,i,!s->rail_focus&&s->column==i,catalog_status==2?live_cards[i].name:titles[i]);
     draw_text(b,190,800,"CHANGE FILTERS WITH CROSS",3,INK_3);
 }
 static void draw_library(void *b,const AppState *s){
