@@ -22,6 +22,8 @@
 #define STBI_NO_LINEAR
 #define STB_IMAGE_IMPLEMENTATION
 #include "third_party/stb_image.h"
+#define STB_TRUETYPE_IMPLEMENTATION
+#include "third_party/hui/third_party/stb/stb_truetype.h"
 
 uint64_t sceLibcHeapSize = 24 * 1024 * 1024;
 enum { WIDTH = 1920, HEIGHT = 1080, BUFFER_COUNT = 2, PAGE_COUNT = 5 };
@@ -33,10 +35,11 @@ typedef struct AppState {
     int page, rail_focus, row, column, search, detail, streams, detail_index;
     int keyboard, search_cursor, result_focus, discover_series, account; char query[24]; int settings[4];
 } AppState;
-static const char *PAGE_NAMES[PAGE_COUNT]={"BOARD","DISCOVER","LIBRARY","ADDONS","SETTINGS"};
+static const char *PAGE_NAMES[PAGE_COUNT]={"Board","Discover","Library","Addons","Settings"};
 static const char *ICON_NAMES[PAGE_COUNT]={"nav_board","nav_discover","nav_library","nav_addons","nav_settings"};
 static Image logo, wordmark, search_icon, cross_icon, circle_icon, triangle_icon, square_icon, options_icon;
 static Image dpad_icon, l1_icon, r1_icon, play_icon, nav_line[PAGE_COUNT], nav_solid[PAGE_COUNT];
+static unsigned char *font_atlas;static stbtt_bakedchar font_chars[96];static int font_ready;
 typedef struct CatalogCard {
     char id[24], name[40], type[12], year[16], runtime[24], rating[12], genres[96];
     char description[640], poster_url[384]; Image poster; int saved, metadata_loaded;
@@ -139,9 +142,9 @@ static int parse_catalog(char *json,int first,int maximum){
         CatalogCard *card=&live_cards[first+count];
         json_value(p,"\"imdb_id\":\"",card->id,sizeof(card->id),0);
         const char *name=strstr(p,"\"name\":\"");if(!name)break;
-        const char *after=json_value(name,"\"name\":\"",card->name,sizeof(card->name),1);if(!after)break;
+        const char *after=json_value(name,"\"name\":\"",card->name,sizeof(card->name),0);if(!after)break;
         const char *type=strstr(after,"\"type\":\"");if(type)json_value(type,"\"type\":\"",card->type,sizeof(card->type),1);
-        const char *description=strstr(after,"\"description\":\"");if(description)json_value(description,"\"description\":\"",card->description,sizeof(card->description),1);
+        const char *description=strstr(after,"\"description\":\"");if(description)json_value(description,"\"description\":\"",card->description,sizeof(card->description),0);
         const char *year=strstr(after,"\"releaseInfo\":\"");if(year)json_value(year,"\"releaseInfo\":\"",card->year,sizeof(card->year),1);
         const char *poster=strstr(after,"\"poster\":\"");if(!poster){p=after;continue;}
         p=json_value(poster,"\"poster\":\"",card->poster_url,sizeof(card->poster_url),0);if(!p)break;++count;
@@ -194,7 +197,7 @@ static void load_metadata(CatalogCard *card){
     strcat(url,card->type[0]?card->type:"MOVIE");for(char *p=url;*p;++p)if(*p>='A'&&*p<='Z')*p+=32;
     strcat(url,"/");strcat(url,card->id);strcat(url,".json");size_t size=0;unsigned char *json=http_get(url,1024*1024,&size);
     if(!json)return;const char *p=(char*)json;const char *v;
-    if((v=strstr(p,"\"description\":\"")))json_value(v,"\"description\":\"",card->description,sizeof(card->description),1);
+    if((v=strstr(p,"\"description\":\"")))json_value(v,"\"description\":\"",card->description,sizeof(card->description),0);
     if((v=strstr(p,"\"runtime\":\"")))json_value(v,"\"runtime\":\"",card->runtime,sizeof(card->runtime),1);
     if((v=strstr(p,"\"imdbRating\":\"")))json_value(v,"\"imdbRating\":\"",card->rating,sizeof(card->rating),1);
     parse_genres(p,card->genres,sizeof(card->genres));card->metadata_loaded=1;free(json);
@@ -252,9 +255,21 @@ static const uint8_t DIGITS[10][5]={
  {0x21,0x41,0x45,0x4b,0x31},{0x18,0x14,0x12,0x7f,0x10},{0x27,0x45,0x45,0x45,0x39},
  {0x3c,0x4a,0x49,0x49,0x30},{1,0x71,9,5,3},{0x36,0x49,0x49,0x49,0x36},{6,0x49,0x49,0x29,0x1e}};
 static void draw_text(void *buffer,int x,int y,const char *text,int scale,uint32_t color){
+    if(font_ready){float factor=(float)(scale*8)/48.0f,cursor=(float)x;uint32_t *target=(uint32_t*)buffer;
+        for(;*text;++text){unsigned ch=(unsigned char)*text;if(ch<32||ch>127)ch='?';stbtt_bakedchar *g=&font_chars[ch-32];
+            int dw=(int)((g->x1-g->x0)*factor),dh=(int)((g->y1-g->y0)*factor),gx=(int)(cursor+g->xoff*factor),gy=(int)(y+(g->yoff+48.0f)*factor);
+            for(int dy=0;dy<dh;++dy){int py=gy+dy;if(py<0||py>=HEIGHT)continue;int sy=g->y0+(int)(dy/factor);for(int dx=0;dx<dw;++dx){int px=gx+dx;if(px<0||px>=WIDTH)continue;int sx=g->x0+(int)(dx/factor);unsigned a=font_atlas[sy*1024+sx];if(!a)continue;
+                uint32_t *d=&target[(size_t)py*WIDTH+px];unsigned dr=*d&255u,dg=(*d>>8)&255u,db=(*d>>16)&255u,cr=color&255u,cg=(color>>8)&255u,cb=(color>>16)&255u;
+                *d=0xff000000u|(((cb*a+db*(255-a))/255)<<16)|(((cg*a+dg*(255-a))/255)<<8)|((cr*a+dr*(255-a))/255);}}
+            cursor+=g->xadvance*factor;}return;}
     for(;*text;++text,x+=6*scale){const uint8_t *bits=*text>='A'&&*text<='Z'?FONT[*text-'A'+1]:*text>='0'&&*text<='9'?DIGITS[*text-'0']:FONT[0];
-        for(int c=0;c<5;++c)for(int r=0;r<7;++r)if(bits[c]&(1u<<r))
-            draw_rect(buffer,x+c*scale,y+r*scale,scale,scale,color);}
+        for(int c=0;c<5;++c)for(int r=0;r<7;++r)if(bits[c]&(1u<<r))draw_rect(buffer,x+c*scale,y+r*scale,scale,scale,color);}
+}
+static void load_font(void){
+    const char *paths[]={"/app0/assets/fonts/Inter-SemiBold.ttf","assets/fonts/Inter-SemiBold.ttf"};FILE *f=0;for(int i=0;i<2&&!f;++i)f=fopen(paths[i],"rb");if(!f)return;
+    fseek(f,0,SEEK_END);long size=ftell(f);rewind(f);unsigned char *ttf=(unsigned char*)malloc((size_t)size);font_atlas=(unsigned char*)calloc(1024*1024,1);
+    if(ttf&&font_atlas&&fread(ttf,1,(size_t)size,f)==(size_t)size)font_ready=stbtt_BakeFontBitmap(ttf,0,48.0f,font_atlas,1024,1024,32,96,font_chars)>0;
+    fclose(f);free(ttf);sceKernelDebugOutText(0,"[stremio-ps4] Inter font atlas=%d\n",font_ready);
 }
 static Image load_image(const char *name){
     Image image={0}; char path[160]; int channels=0;
@@ -264,6 +279,7 @@ static Image load_image(const char *name){
     return image;
 }
 static void load_assets(void){
+    load_font();
     logo=load_image("logo.png");wordmark=load_image("name.png");search_icon=load_image("search.png");
     cross_icon=load_image("cross.png");circle_icon=load_image("circle.png");triangle_icon=load_image("triangle.png");square_icon=load_image("square.png");options_icon=load_image("options.png");
     dpad_icon=load_image("dpad.png");l1_icon=load_image("l1.png");r1_icon=load_image("r1.png");play_icon=load_image("play.png");char name[64];
@@ -280,6 +296,13 @@ static void draw_image(void *buffer,const Image *image,int x,int y,int w,int h){
             unsigned r=(s[0]*a+dr*(255-a))/255,g=(s[1]*a+dg*(255-a))/255,b=(s[2]*a+db*(255-a))/255;
             *d=0xff000000u|(b<<16)|(g<<8)|r;}}
 }
+static void draw_image_rounded(void *buffer,const Image *image,int x,int y,int w,int h,int radius){
+    if(!image->pixels||image->width<=0||image->height<=0)return;uint32_t *target=(uint32_t*)buffer;
+    for(int dy=0;dy<h;++dy){int py=y+dy;if(py<0||py>=HEIGHT)continue;int sy=dy*image->height/h;for(int dx=0;dx<w;++dx){int px=x+dx;if(px<0||px>=WIDTH)continue;
+        int cx=dx<radius?radius-dx-1:dx>=w-radius?dx-(w-radius):0,cy=dy<radius?radius-dy-1:dy>=h-radius?dy-(h-radius):0;if(cx&&cy&&cx*cx+cy*cy>radius*radius)continue;
+        int sx=dx*image->width/w;const unsigned char *s=image->pixels+((size_t)sy*image->width+sx)*4;unsigned a=s[3];if(!a)continue;uint32_t *d=&target[(size_t)py*WIDTH+px];unsigned dr=*d&255u,dg=(*d>>8)&255u,db=(*d>>16)&255u;
+        *d=0xff000000u|(((s[2]*a+db*(255-a))/255)<<16)|(((s[1]*a+dg*(255-a))/255)<<8)|((s[0]*a+dr*(255-a))/255);}}
+}
 static void draw_focus(void *b,int x,int y,int w,int h){
     draw_round_outline(b,x-8,y-8,w+16,h+16,24,4,0xff704bddu);
     draw_round_outline(b,x-4,y-4,w+8,h+8,20,3,INK);
@@ -287,7 +310,7 @@ static void draw_focus(void *b,int x,int y,int w,int h){
 static void draw_card(void *b,int x,int y,int w,int h,int seed,int focused,const char *title){
     static const uint32_t colors[]={0xff49325fu,0xff41305au,0xff34284du,0xff3d2d55u,0xff2c2342u};int poster_h=h-58;
     draw_round_rect(b,x+8,y+14,w,poster_h,20,0xff050405u);draw_round_rect(b,x,y,w,poster_h,18,colors[seed%5]);
-    if(seed<15&&live_cards[seed].poster.pixels)draw_image(b,&live_cards[seed].poster,x,y,w,poster_h);
+    if(seed<15&&live_cards[seed].poster.pixels)draw_image_rounded(b,&live_cards[seed].poster,x,y,w,poster_h,18);
     char shown[21]={0};strncpy(shown,title,sizeof(shown)-1);int scale=strlen(shown)>12?2:3;
     draw_text(b,x,y+poster_h+20,shown,scale,focused?INK:INK_2);if(focused)draw_focus(b,x,y,w,poster_h);
 }
@@ -300,25 +323,25 @@ static void draw_rail(void *b,const AppState *s){
 }
 static void draw_topbar(void *b,const AppState *s){
     int x=190,y=34,w=620,h=60;draw_round_rect(b,x,y,w,h,30,s->search?SURFACE_HI:SURFACE);
-    draw_image(b,&search_icon,x+22,y+16,28,28);draw_text(b,x+72,y+20,s->search?(s->query[0]?s->query:"SEARCH MODE"):"SEARCH MOVIES AND SERIES",3,s->search?INK:INK_3);
+    draw_image(b,&search_icon,x+22,y+16,28,28);draw_text(b,x+72,y+20,s->search?(s->query[0]?s->query:"Search mode"):"Search movies, series and more",3,s->search?INK:INK_3);
     draw_image(b,&triangle_icon,x+w-48,y+14,32,32);if(s->search)draw_focus(b,x,y,w,h);
     if(wordmark.pixels)draw_image(b,&wordmark,1640,42,220,42);else draw_text(b,1600,54,"STREMIO PS FOUR",3,INK_2);
 }
 static void draw_board(void *b,const AppState *s){
-    draw_text(b,190,130,"POPULAR MOVIES",5,INK);draw_text(b,190,178,"LIVE CINEMETA CATALOGS",3,INK_2);
+    draw_text(b,190,130,"Popular movies",5,INK);draw_text(b,190,178,"Live Cinemeta catalogs",3,INK_2);
     const char *titles[]={"FEATURED","TRENDING","MOVIES","SERIES","RECENT"};
     for(int i=0;i<5;++i)draw_card(b,190+i*290,218,250,300,i,!s->rail_focus&&s->row==0&&s->column==i,catalog_status==2?live_cards[i].name:titles[i]);
     const char *status=catalog_status==1?"CONNECTING":catalog_status==2?(poster_count==catalog_count?"LIVE MOVIES AND SERIES":poster_count?"PARTIAL POSTERS":"LIVE CINEMETA"):
         catalog_status==3?"NETWORK INIT FAILED":catalog_status==4?"CATALOG REQUEST FAILED":catalog_status==5?"CATALOG PARSE FAILED":"OFFLINE CONTENT";
     draw_text(b,1110,150,status,3,catalog_status==2?ACCENT_SOFT:INK_3);
-    draw_text(b,190,568,"POPULAR SERIES",5,INK);
+    draw_text(b,190,568,"Popular series",5,INK);
     for(int i=0;i<5;++i){int index=5+i;const char *label=index<catalog_count?live_cards[index].name:"SERIES";
         draw_card(b,190+i*290,628,250,300,index,!s->rail_focus&&s->row==1&&s->column==i,label);}
     draw_image(b,&options_icon,1510,950,38,38);draw_text(b,1562,960,"REFRESH",3,INK_3);
 }
 static void draw_discover(void *b,const AppState *s){
-    draw_text(b,190,154,"DISCOVER",6,INK_2);const char *filters[]={"MOVIES","POPULAR","ALL GENRES"};
-    filters[0]=s->discover_series?"SERIES":"MOVIES";
+    draw_text(b,190,154,"Discover",6,INK_2);const char *filters[]={"Movies","Popular","All genres"};
+    filters[0]=s->discover_series?"Series":"Movies";
     for(int i=0;i<3;++i){draw_round_rect(b,190+i*330,228,300,66,33,i==0?0xff563aa7u:SURFACE);draw_text(b,224+i*330,248,filters[i],3,INK);}
     const char *titles[]={"ACTION","DRAMA","COMEDY","THRILLER","FAMILY"};
     int first=s->discover_series?5:0;
@@ -326,13 +349,13 @@ static void draw_discover(void *b,const AppState *s){
     draw_image(b,&square_icon,190,800,38,38);draw_text(b,244,810,"SWITCH MOVIES SERIES",3,INK_3);
 }
 static void draw_library(void *b,const AppState *s){
-    draw_text(b,190,154,"LIBRARY",6,INK_2);draw_text(b,190,220,"YOUR SAVED MOVIES AND SERIES",3,INK_3);int count=0;
+    draw_text(b,190,154,"Library",6,INK_2);draw_text(b,190,220,"Your saved movies and series",3,INK_3);int count=0;
     for(int i=0;i<5;++i){int index=saved_index(i);if(index<0)break;draw_card(b,190+i*290,330,250,360,index,!s->rail_focus&&s->column==i,live_cards[index].name);++count;}
     if(!count){draw_round_rect(b,190,330,1100,190,30,SURFACE);draw_text(b,250,395,"SAVE A TITLE WITH SQUARE",4,INK_2);}
     draw_round_rect(b,190,780,540,72,36,0xff563aa7u);draw_text(b,242,803,"LOCAL PS FOUR LIBRARY",4,INK);
 }
 static void draw_addons(void *b,const AppState *s){
-    draw_text(b,190,154,"ADDONS",6,INK_2);draw_text(b,190,220,"MANAGE YOUR STREMIO SOURCES",3,INK_3);
+    draw_text(b,190,154,"Addons",6,INK_2);draw_text(b,190,220,"Manage your Stremio sources",3,INK_3);
     const char *names[]={"CINEMETA","PUBLIC DOMAIN","LOCAL FILES","COMMUNITY"};
     for(int i=0;i<4;++i){int y=300+i*145;draw_round_rect(b,190,y,1340,116,28,!s->rail_focus&&s->row==i?SURFACE_HI:SURFACE);
         int enabled=i==0||(i==1&&public_domain_enabled);draw_round_rect(b,214,y+18,80,80,20,enabled?0xff563aa7u:0xff584667u);draw_text(b,330,y+26,names[i],5,INK);
@@ -341,7 +364,7 @@ static void draw_addons(void *b,const AppState *s){
 }
 static void draw_wrapped(void *b,int x,int y,const char *text,int columns,int lines);
 static void draw_settings(void *b,const AppState *s){
-    draw_text(b,190,154,"SETTINGS",6,INK_2);
+    draw_text(b,190,154,"Settings",6,INK_2);
     const char *names[]={"BUILTIN TORRENTS","AUTO SUBTITLES","AUTOPLAY NEXT","UI SOUNDS"};
     for(int i=0;i<4;++i){int y=220+i*112;draw_round_rect(b,190,y,950,88,24,!s->rail_focus&&s->row==i?SURFACE_HI:SURFACE);
         draw_text(b,226,y+32,names[i],4,!s->rail_focus&&s->row==i?INK:INK_2);draw_round_rect(b,1000,y+24,104,42,21,s->settings[i]?0xff563aa7u:0xff514951u);
@@ -354,7 +377,7 @@ static void draw_settings(void *b,const AppState *s){
     draw_wrapped(b,1245,430,help,31,4);draw_round_rect(b,1245,650,230,58,29,INK);draw_image(b,&cross_icon,1260,660,38,38);draw_text(b,1312,670,s->row==4?"OPEN":"SWITCH",3,GROUND);
 }
 static void draw_account(void *b,const AppState *s){
-    (void)s;draw_text(b,190,140,"STREMIO ACCOUNT",6,INK_2);draw_text(b,190,205,"LINK THIS PS FOUR TO YOUR STREMIO ACCOUNT",3,INK_3);
+    (void)s;draw_text(b,190,140,"Stremio account",6,INK_2);draw_text(b,190,205,"Link this PS4 to your Stremio account",3,INK_3);
     draw_round_rect(b,190,270,1420,430,34,SURFACE);draw_round_rect(b,230,310,180,180,36,0xff3d2a73u);draw_image(b,&logo,280,360,80,80);
     if(account_status==4){draw_round_rect(b,460,320,270,48,24,0xff315d3fu);draw_text(b,500,334,"ACCOUNT LINKED",3,0xff8cffaau);
         draw_text(b,460,410,"WELCOME BACK",6,INK);draw_text(b,460,500,"YOUR SECURE ACCOUNT KEY IS SAVED LOCALLY",3,INK_2);draw_text(b,460,550,"LIBRARY AND ADDON SYNC IS BEING PREPARED",3,INK_3);}
@@ -374,7 +397,7 @@ static void draw_wrapped(void *b,int x,int y,const char *text,int columns,int li
 static void draw_detail(void *b,const AppState *s){
     int index=s->detail_index;if(index<0||index>=15||!live_cards[index].name[0])return;CatalogCard *card=&live_cards[index];
     draw_text(b,190,140,"TITLE DETAILS",5,ACCENT_SOFT);
-    draw_rect(b,190,220,360,540,SURFACE);if(card->poster.pixels)draw_image(b,&card->poster,190,220,360,540);
+    draw_round_rect(b,190,220,360,540,24,SURFACE);if(card->poster.pixels)draw_image_rounded(b,&card->poster,190,220,360,540,24);
     char title[41]={0};strncpy(title,card->name,sizeof(title)-1);draw_text(b,610,230,title,strlen(title)>22?3:5,INK);
     draw_text(b,610,310,card->type,4,ACCENT_SOFT);draw_text(b,830,310,card->year,4,INK_2);
     draw_text(b,610,360,card->runtime,3,INK_2);draw_text(b,790,360,card->rating,3,0xff18c5f5u);draw_text(b,940,360,card->genres,2,INK_3);

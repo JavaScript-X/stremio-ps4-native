@@ -8,7 +8,7 @@
 
 ## PS4 port status
 
-Version 0.20 uses the stable native VideoOut renderer and has been tested on
+Version 0.21 uses the stable native VideoOut renderer and has been tested on
 PS4 firmware 13.02 with GoldHEN 2.4b18.12. It includes live Cinemeta movie and
 series catalogs, poster loading, search, metadata, local library and settings
 persistence, controller navigation, Stremio device-link account authentication,
@@ -18,6 +18,9 @@ The 0.20 interface ports the PS5 design system into the PS4 renderer: violet
 ambient backdrops, rounded surfaces and pills, layered focus rings, poster-first
 cards, a centered navigation rail, contextual Settings help, and redesigned
 account, addon, search, library, detail, and source screens.
+Version 0.21 replaces the temporary bitmap alphabet with the PS5 port's bundled
+Inter typeface, real glyph spacing and punctuation, mixed-case labels, and
+rounded clipping for poster artwork.
 
 The upstream PS5 documentation is retained below while features are moved to
 the PS4 platform layer. PS5 installation instructions and artifacts do not

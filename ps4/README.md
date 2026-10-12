@@ -88,6 +88,10 @@ Version 0.20 ports the PS5 interface styling into the direct VideoOut renderer:
 rounded panels and pills, violet layered backgrounds, softer navigation states,
 PS5-style poster cards and focus rings, a contextual two-column Settings page,
 and redesigned account, addon, library, search, detail, and stream layouts.
+Version 0.21 replaces the bring-up bitmap alphabet with a cached native atlas
+generated from the same bundled Inter typeface used by the PS5 UI. It adds real
+glyph metrics and punctuation, mixed-case presentation, and properly clipped
+rounded poster artwork without changing the stable VideoOut backend.
 
 The output is `dist-ps4/IV0000-BREW00991_00-STREMIOPS4000000.pkg`.
 The current package is a native 1080p VideoOut application using DualShock 4

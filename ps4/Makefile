@@ -16,6 +16,7 @@ UI_ASSETS   := logo.png search.png \
 	nav_board.png nav_board_o.png nav_discover.png nav_discover_o.png \
 	nav_library.png nav_library_o.png nav_addons.png nav_addons_o.png \
 	nav_settings.png nav_settings_o.png
+UI_FONTS    := Inter-SemiBold.ttf
 
 TOOLCHAIN   := $(OO_PS4_TOOLCHAIN)
 ROOT        := $(abspath ..)
@@ -45,7 +46,7 @@ endif
 
 ifeq ($(BUILD_MODE),videoout)
 TITLE       := Stremio PS4
-VERSION     := 0.20
+VERSION     := 0.21
 SOURCE      := videoout/main.c
 OBJECT      := $(OBJDIR)/videoout.o
 LIBS        := -lc -lm -lkernel -lSceVideoOut -lSceSystemService -lScePad -lSceUserService \
@@ -113,10 +114,11 @@ $(STAGE)/sce_sys/param.sfo: Makefile
 	$(TOOLS)/PkgTool.Core sfo_setentry $@ VERSION --type Utf8 --maxsize 8 --value '$(VERSION)'
 
 $(STAGE)/.ready: $(BUILD)/eboot.bin $(STAGE)/sce_sys/param.sfo $(ROOT)/app/sce_sys/icon0.png
-	mkdir -p $(STAGE)/sce_module $(STAGE)/sce_sys/about $(STAGE)/assets
+	mkdir -p $(STAGE)/sce_module $(STAGE)/sce_sys/about $(STAGE)/assets/fonts
 	cp $(BUILD)/eboot.bin $(STAGE)/eboot.bin
 	cp $(ROOT)/app/sce_sys/icon0.png $(STAGE)/sce_sys/icon0.png
 	@if [ "$(BUILD_MODE)" = "videoout" ]; then for asset in $(UI_ASSETS); do cp $(ROOT)/app/assets/icons_4k/$$asset $(STAGE)/assets/; done; fi
+	@if [ "$(BUILD_MODE)" = "videoout" ]; then for font in $(UI_FONTS); do cp $(ROOT)/app/fonts/$$font $(STAGE)/assets/fonts/; done; fi
 	cp $(TOOLCHAIN)/samples/piglet/sce_module/libc.prx $(STAGE)/sce_module/libc.prx
 	cp $(TOOLCHAIN)/samples/piglet/sce_module/libSceFios2.prx $(STAGE)/sce_module/libSceFios2.prx
 	cp $(TOOLCHAIN)/samples/piglet/sce_sys/about/right.sprx $(STAGE)/sce_sys/about/right.sprx
@@ -125,7 +127,7 @@ $(STAGE)/.ready: $(BUILD)/eboot.bin $(STAGE)/sce_sys/param.sfo $(ROOT)/app/sce_s
 $(PKG): $(STAGE)/.ready
 	mkdir -p $(DIST)
 	cd $(STAGE) && $(TOOLS)/create-gp4 -out pkg.gp4 --content-id=$(CONTENT_ID) \
-		--files "eboot.bin sce_module/libc.prx sce_module/libSceFios2.prx sce_sys/about/right.sprx sce_sys/param.sfo sce_sys/icon0.png $(UI_ASSETS:%=assets/%)"
+		--files "eboot.bin sce_module/libc.prx sce_module/libSceFios2.prx sce_sys/about/right.sprx sce_sys/param.sfo sce_sys/icon0.png $(UI_ASSETS:%=assets/%) $(UI_FONTS:%=assets/fonts/%)"
 	cd $(STAGE) && $(TOOLS)/PkgTool.Core pkg_build pkg.gp4 $(DIST)
 
 clean:
