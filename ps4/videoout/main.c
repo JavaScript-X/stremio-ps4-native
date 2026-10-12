@@ -34,6 +34,7 @@ static Image logo, search_icon, nav_line[PAGE_COUNT], nav_solid[PAGE_COUNT];
 typedef struct CatalogCard { char name[32]; char poster_url[384]; Image poster; } CatalogCard;
 static CatalogCard live_cards[5];
 static int catalog_status;
+static int poster_count;
 static int net_pool, ssl_context, http_context;
 
 static int network_init(void){
@@ -84,10 +85,13 @@ static int parse_catalog(char *json){
 
 static void load_live_catalog(void){
     catalog_status=1;if(!network_init()){catalog_status=3;return;}size_t size=0;
-    unsigned char *json=http_get("https://v3-cinemeta.strem.io/catalog/movie/top.json",2*1024*1024,&size);
-    if(!json){catalog_status=3;return;}int count=parse_catalog((char*)json);free(json);if(count==0){catalog_status=3;return;}
+    // v3-cinemeta currently redirects this resource. SceHttp does not follow
+    // redirects by default, so use the canonical catalog host from Location.
+    unsigned char *json=http_get("https://cinemeta-catalogs.strem.io/top/catalog/movie/top.json",2*1024*1024,&size);
+    if(!json){catalog_status=4;return;}int count=parse_catalog((char*)json);free(json);if(count==0){catalog_status=5;return;}
     for(int i=0;i<count;++i){size_t image_size=0;unsigned char *encoded=http_get(live_cards[i].poster_url,3*1024*1024,&image_size);
-        if(encoded){int channels=0;live_cards[i].poster.pixels=stbi_load_from_memory(encoded,(int)image_size,&live_cards[i].poster.width,&live_cards[i].poster.height,&channels,4);free(encoded);}}
+        if(encoded){int channels=0;live_cards[i].poster.pixels=stbi_load_from_memory(encoded,(int)image_size,&live_cards[i].poster.width,&live_cards[i].poster.height,&channels,4);
+            if(live_cards[i].poster.pixels)++poster_count;free(encoded);}}
     catalog_status=2;
 }
 
@@ -169,7 +173,9 @@ static void draw_board(void *b,const AppState *s){
     draw_text(b,190,154,"POPULAR NOW",6,INK);draw_text(b,190,220,"MOVIES AND SERIES FROM YOUR ADDONS",3,INK_2);
     const char *titles[]={"FEATURED","TRENDING","MOVIES","SERIES","RECENT"};
     for(int i=0;i<5;++i)draw_card(b,190+i*290,300,250,360,i,!s->rail_focus&&s->row==0&&s->column==i,catalog_status==2?live_cards[i].name:titles[i]);
-    draw_text(b,1120,220,catalog_status==1?"CONNECTING":catalog_status==2?"LIVE CINEMETA":"OFFLINE CONTENT",3,catalog_status==2?ACCENT_SOFT:INK_3);
+    const char *status=catalog_status==1?"CONNECTING":catalog_status==2?(poster_count?"LIVE CINEMETA POSTERS":"LIVE CINEMETA"):
+        catalog_status==3?"NETWORK INIT FAILED":catalog_status==4?"CATALOG REQUEST FAILED":catalog_status==5?"CATALOG PARSE FAILED":"OFFLINE CONTENT";
+    draw_text(b,1030,220,status,3,catalog_status==2?ACCENT_SOFT:INK_3);
     draw_text(b,190,728,"CONTINUE WATCHING",5,INK);
     for(int i=0;i<4;++i){int x=190+i*365;draw_rect(b,x,800,330,145,s->column==i&&s->row==1?SURFACE_HI:SURFACE);draw_rect(b,x,930,330,7,ACCENT);
         if(!s->rail_focus&&s->row==1&&s->column==i)draw_focus(b,x,800,330,145);}

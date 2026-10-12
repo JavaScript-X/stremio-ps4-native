@@ -54,6 +54,9 @@ navigation, settings toggles, L1/R1 switching, back routing and clean exit.
 Version 0.10 adds the PS4 network/SSL/HTTP stack, loads the live Cinemeta movie
 catalog used by the PS5 port, parses its titles and poster URLs, downloads and
 decodes JPEG posters, and keeps the shell usable with offline fallback content.
+Version 0.11 follows Cinemeta's current canonical catalog host instead of
+rejecting its HTTP 307 redirect and exposes precise network/request/parse state
+in the Board status line for hardware diagnosis.
 
 The output is `dist-ps4/IV0000-BREW00991_00-STREMIOPS4000000.pkg`.
 It is a bring-up build, not the Stremio application: on compatible jailbroken
