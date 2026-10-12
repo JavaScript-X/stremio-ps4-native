@@ -44,10 +44,11 @@ endif
 
 ifeq ($(BUILD_MODE),videoout)
 TITLE       := Stremio PS4
-VERSION     := 0.09
+VERSION     := 0.10
 SOURCE      := videoout/main.c
 OBJECT      := $(OBJDIR)/videoout.o
-LIBS        := -lc -lm -lkernel -lSceVideoOut -lSceSystemService -lScePad -lSceUserService
+LIBS        := -lc -lm -lkernel -lSceVideoOut -lSceSystemService -lScePad -lSceUserService \
+	-lSceNet -lSceSsl -lSceHttp -lSceSysmodule
 EXTRAFLAGS  := -O2 -DPLATFORM_PS4=1
 FSELF_FLAGS := --paid 0x3800000000000011
 endif

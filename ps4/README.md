@@ -51,6 +51,9 @@ Version 0.09 makes a larger step toward the PS5 frontend: it packages and
 decodes the PS5 port's original navigation artwork, adopts its left rail and
 theme, implements five distinct screens, search overlay, content-grid
 navigation, settings toggles, L1/R1 switching, back routing and clean exit.
+Version 0.10 adds the PS4 network/SSL/HTTP stack, loads the live Cinemeta movie
+catalog used by the PS5 port, parses its titles and poster URLs, downloads and
+decodes JPEG posters, and keeps the shell usable with offline fallback content.
 
 The output is `dist-ps4/IV0000-BREW00991_00-STREMIOPS4000000.pkg`.
 It is a bring-up build, not the Stremio application: on compatible jailbroken

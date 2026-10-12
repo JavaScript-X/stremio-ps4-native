@@ -1,15 +1,21 @@
 // Native PS4 frontend using the stable direct VideoOut path. Its layout,
 // assets, colors and controller routing are adapted from the PS5 frontend.
+#include <stdbool.h>
 #include <orbis/SystemService.h>
 #include <orbis/Pad.h>
 #include <orbis/UserService.h>
 #include <orbis/VideoOut.h>
 #include <orbis/libkernel.h>
+#include <orbis/Http.h>
+#include <orbis/Ssl.h>
+#include <orbis/Net.h>
+#include <orbis/Sysmodule.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 #define STBI_ONLY_PNG
+#define STBI_ONLY_JPEG
 #define STBI_NO_HDR
 #define STBI_NO_LINEAR
 #define STB_IMAGE_IMPLEMENTATION
@@ -25,6 +31,65 @@ typedef struct AppState { int page, rail_focus, row, column, search; int setting
 static const char *PAGE_NAMES[PAGE_COUNT]={"BOARD","DISCOVER","LIBRARY","ADDONS","SETTINGS"};
 static const char *ICON_NAMES[PAGE_COUNT]={"nav_board","nav_discover","nav_library","nav_addons","nav_settings"};
 static Image logo, search_icon, nav_line[PAGE_COUNT], nav_solid[PAGE_COUNT];
+typedef struct CatalogCard { char name[32]; char poster_url[384]; Image poster; } CatalogCard;
+static CatalogCard live_cards[5];
+static int catalog_status;
+static int net_pool, ssl_context, http_context;
+
+static int network_init(void){
+    if(sceSysmoduleLoadModuleInternal(ORBIS_SYSMODULE_INTERNAL_NET)<0)return 0;
+    if(sceSysmoduleLoadModuleInternal(ORBIS_SYSMODULE_INTERNAL_HTTP)<0)return 0;
+    if(sceSysmoduleLoadModuleInternal(ORBIS_SYSMODULE_INTERNAL_SSL)<0)return 0;
+    sceNetInit();
+    net_pool=sceNetPoolCreate("stremio_net",256*1024,0);if(net_pool<0)return 0;
+    ssl_context=sceSslInit(SSL_POOLSIZE);if(ssl_context<0)return 0;
+    http_context=sceHttpInit(net_pool,ssl_context,LIBHTTP_POOLSIZE);return http_context>=0;
+}
+
+static unsigned char *http_get(const char *url,size_t limit,size_t *received){
+    *received=0;int tpl=0,conn=0,req=0,status=0;unsigned char *body=0;size_t used=0,capacity=0;
+    tpl=sceHttpCreateTemplate(http_context,"Stremio-PS4/0.10",ORBIS_HTTP_VERSION_1_1,1);if(tpl<0)goto done;
+    sceHttpSetResolveTimeOut(tpl,5000000);sceHttpSetConnectTimeOut(tpl,5000000);sceHttpSetRecvTimeOut(tpl,7000000);
+    conn=sceHttpCreateConnectionWithURL(tpl,url,1);if(conn<0)goto done;
+    req=sceHttpCreateRequestWithURL(conn,ORBIS_METHOD_GET,url,0);if(req<0)goto done;
+    sceHttpAddRequestHeader(req,"Accept","application/json,image/*",0);
+    if(sceHttpSendRequest(req,0,0)<0||sceHttpGetStatusCode(req,&status)<0||status<200||status>=300)goto done;
+    capacity=64*1024;if(capacity>limit)capacity=limit;body=(unsigned char*)malloc(capacity+1);if(!body)goto done;
+    for(;;){
+        if(used==capacity){size_t next=capacity*2;if(next>limit)next=limit;if(next<=capacity)goto failed;
+            unsigned char *grown=(unsigned char*)realloc(body,next+1);if(!grown)goto failed;body=grown;capacity=next;}
+        int got=sceHttpReadData(req,body+used,(uint32_t)(capacity-used));if(got<0)goto failed;if(got==0)break;used+=(size_t)got;
+    }
+    body[used]=0;*received=used;goto done;
+failed:
+    free(body);body=0;used=0;
+done:
+    if(req>0)sceHttpDeleteRequest(req);if(conn>0)sceHttpDeleteConnection(conn);if(tpl>0)sceHttpDeleteTemplate(tpl);
+    sceKernelDebugOutText(0,"[stremio-ps4] GET %s status=%d bytes=%lu\n",url,status,(unsigned long)used);return body;
+}
+
+static const char *json_value(const char *from,const char *key,char *out,size_t out_size,int uppercase){
+    const char *p=strstr(from,key);if(!p)return 0;p+=strlen(key);size_t n=0;
+    while(*p&&*p!='\"'){if(*p=='\\'&&p[1])++p;if(n+1<out_size){char c=*p;out[n++]=uppercase&&c>='a'&&c<='z'?c-32:c;}++p;}
+    out[n]=0;return *p?p+1:0;
+}
+
+static int parse_catalog(char *json){
+    const char *p=json;int count=0;while(count<5&&(p=strstr(p,"\"name\":\""))){
+        const char *after=json_value(p,"\"name\":\"",live_cards[count].name,sizeof(live_cards[count].name),1);if(!after)break;
+        const char *poster=strstr(after,"\"poster\":\"");if(!poster){p=after;continue;}
+        p=json_value(poster,"\"poster\":\"",live_cards[count].poster_url,sizeof(live_cards[count].poster_url),0);if(!p)break;++count;
+    }return count;
+}
+
+static void load_live_catalog(void){
+    catalog_status=1;if(!network_init()){catalog_status=3;return;}size_t size=0;
+    unsigned char *json=http_get("https://v3-cinemeta.strem.io/catalog/movie/top.json",2*1024*1024,&size);
+    if(!json){catalog_status=3;return;}int count=parse_catalog((char*)json);free(json);if(count==0){catalog_status=3;return;}
+    for(int i=0;i<count;++i){size_t image_size=0;unsigned char *encoded=http_get(live_cards[i].poster_url,3*1024*1024,&image_size);
+        if(encoded){int channels=0;live_cards[i].poster.pixels=stbi_load_from_memory(encoded,(int)image_size,&live_cards[i].poster.width,&live_cards[i].poster.height,&channels,4);free(encoded);}}
+    catalog_status=2;
+}
 
 static void park_error(const char *message,int code){
     sceKernelDebugOutText(0,"[stremio-ps4] %s: 0x%08x\n",message,(unsigned)code);
@@ -83,7 +148,9 @@ static void draw_focus(void *b,int x,int y,int w,int h){
 }
 static void draw_card(void *b,int x,int y,int w,int h,int seed,int focused,const char *title){
     static const uint32_t colors[]={0xff7c304fu,0xff735239u,0xff3b626eu,0xff71415eu,0xff4c3978u};
-    draw_rect(b,x,y,w,h,colors[seed%5]);draw_rect(b,x,y+h-70,w,70,0xff1a151cu);
+    draw_rect(b,x,y,w,h,colors[seed%5]);
+    if(catalog_status==2&&live_cards[seed%5].poster.pixels)draw_image(b,&live_cards[seed%5].poster,x,y,w,h-70);
+    draw_rect(b,x,y+h-70,w,70,0xff1a151cu);
     draw_text(b,x+14,y+h-48,title,3,INK);if(focused)draw_focus(b,x,y,w,h);
 }
 static void draw_rail(void *b,const AppState *s){
@@ -101,7 +168,8 @@ static void draw_topbar(void *b,const AppState *s){
 static void draw_board(void *b,const AppState *s){
     draw_text(b,190,154,"POPULAR NOW",6,INK);draw_text(b,190,220,"MOVIES AND SERIES FROM YOUR ADDONS",3,INK_2);
     const char *titles[]={"FEATURED","TRENDING","MOVIES","SERIES","RECENT"};
-    for(int i=0;i<5;++i)draw_card(b,190+i*290,300,250,360,i,!s->rail_focus&&s->row==0&&s->column==i,titles[i]);
+    for(int i=0;i<5;++i)draw_card(b,190+i*290,300,250,360,i,!s->rail_focus&&s->row==0&&s->column==i,catalog_status==2?live_cards[i].name:titles[i]);
+    draw_text(b,1120,220,catalog_status==1?"CONNECTING":catalog_status==2?"LIVE CINEMETA":"OFFLINE CONTENT",3,catalog_status==2?ACCENT_SOFT:INK_3);
     draw_text(b,190,728,"CONTINUE WATCHING",5,INK);
     for(int i=0;i<4;++i){int x=190+i*365;draw_rect(b,x,800,330,145,s->column==i&&s->row==1?SURFACE_HI:SURFACE);draw_rect(b,x,930,330,7,ACCENT);
         if(!s->rail_focus&&s->row==1&&s->column==i)draw_focus(b,x,800,330,145);}
@@ -173,11 +241,13 @@ int main(void){
     void *buffers[BUFFER_COUNT]={video_memory,(uint8_t*)video_memory+frame_size};OrbisVideoOutBufferAttribute attribute;
     sceVideoOutSetBufferAttribute(&attribute,0x80000000,1,0,WIDTH,HEIGHT,WIDTH);
     result=sceVideoOutRegisterBuffers(video,0,buffers,BUFFER_COUNT,&attribute);if(result<0)park_error("sceVideoOutRegisterBuffers",result);
-    load_assets();AppState state={0};for(int i=0;i<4;++i)state.settings[i]=1;
+    load_assets();AppState state={0};for(int i=0;i<4;++i)state.settings[i]=1;catalog_status=1;
     draw_screen(buffers[0],&state);draw_screen(buffers[1],&state);sceVideoOutSetFlipRate(video,0);
     result=sceVideoOutSubmitFlip(video,0,ORBIS_VIDEO_OUT_FLIP_VSYNC,1);if(result<0)park_error("sceVideoOutSubmitFlip",result);
-    sceSystemServiceHideSplashScreen();const int pad=open_pad();if(pad<0)park_error("scePadOpen",pad);
-    int active_buffer=0;int64_t flip_id=2;uint32_t previous_buttons=0;
+    sceSystemServiceHideSplashScreen();
+    load_live_catalog();draw_screen(buffers[1],&state);sceVideoOutSubmitFlip(video,1,ORBIS_VIDEO_OUT_FLIP_VSYNC,2);
+    const int pad=open_pad();if(pad<0)park_error("scePadOpen",pad);
+    int active_buffer=1;int64_t flip_id=3;uint32_t previous_buttons=0;
     for(;;){OrbisPadData input={0};if(scePadReadState(pad,&input)==0){uint32_t pressed=input.buttons&~previous_buttons;previous_buttons=input.buttons;
         int changed=route_input(&state,pressed);if(changed<0){scePadClose(pad);sceSystemServiceLoadExec("exit",0);}
         if(changed>0){active_buffer^=1;draw_screen(buffers[active_buffer],&state);sceVideoOutSubmitFlip(video,active_buffer,ORBIS_VIDEO_OUT_FLIP_VSYNC,flip_id++);}}
