@@ -63,6 +63,9 @@ card labels and shows live catalog titles consistently in Discover.
 Version 0.13 anchors each parsed card to its Cinemeta metadata object so nested
 rating, genre and link names cannot replace movie titles. Long titles now use
 a smaller card-label scale rather than overflowing or disappearing.
+Version 0.14 loads separate live movie and series catalogs with ten poster
+cards, adds vertical row navigation, parses IMDb id/type/year/description, and
+opens a native title-details screen with Cross and returns with Circle.
 
 The output is `dist-ps4/IV0000-BREW00991_00-STREMIOPS4000000.pkg`.
 It is a bring-up build, not the Stremio application: on compatible jailbroken

@@ -27,12 +27,16 @@ static const uint32_t GROUND=0xff110b0cu, SURFACE=0xff292328u, SURFACE_HI=0xff3a
 static const uint32_t ACCENT=0xfff55b7bu, ACCENT_SOFT=0xffff8ba5u;
 static const uint32_t INK=0xfff7f7f7u, INK_2=0xffc8c8c8u, INK_3=0xff8f8f8fu;
 typedef struct Image { unsigned char *pixels; int width, height; } Image;
-typedef struct AppState { int page, rail_focus, row, column, search; int settings[4]; } AppState;
+typedef struct AppState { int page, rail_focus, row, column, search, detail, detail_index; int settings[4]; } AppState;
 static const char *PAGE_NAMES[PAGE_COUNT]={"BOARD","DISCOVER","LIBRARY","ADDONS","SETTINGS"};
 static const char *ICON_NAMES[PAGE_COUNT]={"nav_board","nav_discover","nav_library","nav_addons","nav_settings"};
 static Image logo, search_icon, nav_line[PAGE_COUNT], nav_solid[PAGE_COUNT];
-typedef struct CatalogCard { char name[32]; char poster_url[384]; Image poster; } CatalogCard;
-static CatalogCard live_cards[5];
+typedef struct CatalogCard {
+    char id[24], name[40], type[12], year[16], description[640], poster_url[384];
+    Image poster;
+} CatalogCard;
+static CatalogCard live_cards[10];
+static int catalog_count;
 static int catalog_status;
 static int poster_count;
 static int net_pool, ssl_context, http_context;
@@ -75,12 +79,17 @@ static const char *json_value(const char *from,const char *key,char *out,size_t 
     out[n]=0;return *p?p+1:0;
 }
 
-static int parse_catalog(char *json){
-    const char *p=json;int count=0;while(count<5&&(p=strstr(p,"\"imdb_id\":\""))){
+static int parse_catalog(char *json,int first,int maximum){
+    const char *p=json;int count=0;while(count<maximum&&(p=strstr(p,"\"imdb_id\":\""))){
+        CatalogCard *card=&live_cards[first+count];
+        json_value(p,"\"imdb_id\":\"",card->id,sizeof(card->id),0);
         const char *name=strstr(p,"\"name\":\"");if(!name)break;
-        const char *after=json_value(name,"\"name\":\"",live_cards[count].name,sizeof(live_cards[count].name),1);if(!after)break;
+        const char *after=json_value(name,"\"name\":\"",card->name,sizeof(card->name),1);if(!after)break;
+        const char *type=strstr(after,"\"type\":\"");if(type)json_value(type,"\"type\":\"",card->type,sizeof(card->type),1);
+        const char *description=strstr(after,"\"description\":\"");if(description)json_value(description,"\"description\":\"",card->description,sizeof(card->description),1);
+        const char *year=strstr(after,"\"releaseInfo\":\"");if(year)json_value(year,"\"releaseInfo\":\"",card->year,sizeof(card->year),1);
         const char *poster=strstr(after,"\"poster\":\"");if(!poster){p=after;continue;}
-        p=json_value(poster,"\"poster\":\"",live_cards[count].poster_url,sizeof(live_cards[count].poster_url),0);if(!p)break;++count;
+        p=json_value(poster,"\"poster\":\"",card->poster_url,sizeof(card->poster_url),0);if(!p)break;++count;
     }return count;
 }
 
@@ -89,8 +98,10 @@ static void load_live_catalog(void){
     // v3-cinemeta currently redirects this resource. SceHttp does not follow
     // redirects by default, so use the canonical catalog host from Location.
     unsigned char *json=http_get("https://cinemeta-catalogs.strem.io/top/catalog/movie/top.json",2*1024*1024,&size);
-    if(!json){catalog_status=4;return;}int count=parse_catalog((char*)json);free(json);if(count==0){catalog_status=5;return;}
-    for(int i=0;i<count;++i){size_t image_size=0;
+    if(!json){catalog_status=4;return;}int movies=parse_catalog((char*)json,0,5);free(json);if(movies==0){catalog_status=5;return;}
+    json=http_get("https://cinemeta-catalogs.strem.io/top/catalog/series/top.json",2*1024*1024,&size);
+    int series=0;if(json){series=parse_catalog((char*)json,movies,5);free(json);}catalog_count=movies+series;
+    for(int i=0;i<catalog_count;++i){size_t image_size=0;
         // The extensionless endpoint can redirect or return WebP. Its JPEG
         // representation is direct and supported by the native decoder.
         if(strlen(live_cards[i].poster_url)+4<sizeof(live_cards[i].poster_url))strcat(live_cards[i].poster_url,".jpg");
@@ -124,9 +135,13 @@ static const uint8_t FONT[27][5]={
  {0x7f,0x09,0x19,0x29,0x46},{0x46,0x49,0x49,0x49,0x31},{1,1,0x7f,1,1},
  {0x3f,0x40,0x40,0x40,0x3f},{0x1f,0x20,0x40,0x20,0x1f},{0x3f,0x40,0x38,0x40,0x3f},
  {0x63,0x14,0x08,0x14,0x63},{0x07,0x08,0x70,0x08,0x07},{0x61,0x51,0x49,0x45,0x43}};
+static const uint8_t DIGITS[10][5]={
+ {0x3e,0x51,0x49,0x45,0x3e},{0,0x42,0x7f,0x40,0},{0x42,0x61,0x51,0x49,0x46},
+ {0x21,0x41,0x45,0x4b,0x31},{0x18,0x14,0x12,0x7f,0x10},{0x27,0x45,0x45,0x45,0x39},
+ {0x3c,0x4a,0x49,0x49,0x30},{1,0x71,9,5,3},{0x36,0x49,0x49,0x49,0x36},{6,0x49,0x49,0x29,0x1e}};
 static void draw_text(void *buffer,int x,int y,const char *text,int scale,uint32_t color){
-    for(;*text;++text,x+=6*scale){int glyph=*text>='A'&&*text<='Z'?*text-'A'+1:0;
-        for(int c=0;c<5;++c)for(int r=0;r<7;++r)if(FONT[glyph][c]&(1u<<r))
+    for(;*text;++text,x+=6*scale){const uint8_t *bits=*text>='A'&&*text<='Z'?FONT[*text-'A'+1]:*text>='0'&&*text<='9'?DIGITS[*text-'0']:FONT[0];
+        for(int c=0;c<5;++c)for(int r=0;r<7;++r)if(bits[c]&(1u<<r))
             draw_rect(buffer,x+c*scale,y+r*scale,scale,scale,color);}
 }
 static Image load_image(const char *name){
@@ -158,7 +173,7 @@ static void draw_focus(void *b,int x,int y,int w,int h){
 static void draw_card(void *b,int x,int y,int w,int h,int seed,int focused,const char *title){
     static const uint32_t colors[]={0xff7c304fu,0xff735239u,0xff3b626eu,0xff71415eu,0xff4c3978u};
     draw_rect(b,x,y,w,h,colors[seed%5]);
-    if(catalog_status==2&&live_cards[seed%5].poster.pixels)draw_image(b,&live_cards[seed%5].poster,x,y,w,h-70);
+    if(catalog_status==2&&seed<catalog_count&&live_cards[seed].poster.pixels)draw_image(b,&live_cards[seed].poster,x,y,w,h-70);
     draw_rect(b,x,y+h-70,w,70,0xff1a151cu);char shown[21]={0};strncpy(shown,title,sizeof(shown)-1);
     int scale=strlen(shown)>12?2:3;draw_text(b,x+14,y+h-46,shown,scale,INK);if(focused)draw_focus(b,x,y,w,h);
 }
@@ -175,15 +190,15 @@ static void draw_topbar(void *b,const AppState *s){
     if(s->search)draw_focus(b,x,y,w,h);draw_text(b,1600,54,"STREMIO PS FOUR",3,INK_2);
 }
 static void draw_board(void *b,const AppState *s){
-    draw_text(b,190,154,"POPULAR NOW",6,INK);draw_text(b,190,220,"MOVIES AND SERIES FROM YOUR ADDONS",3,INK_2);
+    draw_text(b,190,130,"POPULAR MOVIES",5,INK);draw_text(b,190,178,"LIVE CINEMETA CATALOGS",3,INK_2);
     const char *titles[]={"FEATURED","TRENDING","MOVIES","SERIES","RECENT"};
-    for(int i=0;i<5;++i)draw_card(b,190+i*290,300,250,360,i,!s->rail_focus&&s->row==0&&s->column==i,catalog_status==2?live_cards[i].name:titles[i]);
-    const char *status=catalog_status==1?"CONNECTING":catalog_status==2?(poster_count==5?"LIVE CINEMETA POSTERS":poster_count?"PARTIAL POSTERS":"LIVE CINEMETA"):
+    for(int i=0;i<5;++i)draw_card(b,190+i*290,218,250,300,i,!s->rail_focus&&s->row==0&&s->column==i,catalog_status==2?live_cards[i].name:titles[i]);
+    const char *status=catalog_status==1?"CONNECTING":catalog_status==2?(poster_count==catalog_count?"LIVE MOVIES AND SERIES":poster_count?"PARTIAL POSTERS":"LIVE CINEMETA"):
         catalog_status==3?"NETWORK INIT FAILED":catalog_status==4?"CATALOG REQUEST FAILED":catalog_status==5?"CATALOG PARSE FAILED":"OFFLINE CONTENT";
-    draw_text(b,1030,220,status,3,catalog_status==2?ACCENT_SOFT:INK_3);
-    draw_text(b,190,728,"CONTINUE WATCHING",5,INK);
-    for(int i=0;i<4;++i){int x=190+i*365;draw_rect(b,x,800,330,145,s->column==i&&s->row==1?SURFACE_HI:SURFACE);draw_rect(b,x,930,330,7,ACCENT);
-        if(!s->rail_focus&&s->row==1&&s->column==i)draw_focus(b,x,800,330,145);}
+    draw_text(b,1110,150,status,3,catalog_status==2?ACCENT_SOFT:INK_3);
+    draw_text(b,190,568,"POPULAR SERIES",5,INK);
+    for(int i=0;i<5;++i){int index=5+i;const char *label=index<catalog_count?live_cards[index].name:"SERIES";
+        draw_card(b,190+i*290,628,250,300,index,!s->rail_focus&&s->row==1&&s->column==i,label);}
 }
 static void draw_discover(void *b,const AppState *s){
     draw_text(b,190,154,"DISCOVER",7,INK);const char *filters[]={"MOVIES","POPULAR","ALL GENRES"};
@@ -211,13 +226,31 @@ static void draw_settings(void *b,const AppState *s){
         draw_text(b,230,y+32,names[i],4,INK);draw_rect(b,1190,y+20,160,56,s->settings[i]?ACCENT:0xff514951u);
         draw_text(b,1230,y+38,s->settings[i]?"ON":"OFF",3,INK);if(!s->rail_focus&&s->row==i)draw_focus(b,190,y,1200,96);}
 }
+static void draw_wrapped(void *b,int x,int y,const char *text,int columns,int lines){
+    char line[64];const char *p=text;
+    for(int row=0;row<lines&&*p;++row){int n=0,last_space=-1;
+        while(p[n]&&n<columns){if(p[n]==' ')last_space=n;++n;}
+        if(p[n]&&last_space>0)n=last_space;memcpy(line,p,(size_t)n);line[n]=0;draw_text(b,x,y+row*42,line,3,INK_2);
+        p+=n;while(*p==' ')++p;}
+}
+static void draw_detail(void *b,const AppState *s){
+    int index=s->detail_index;if(index<0||index>=catalog_count)return;CatalogCard *card=&live_cards[index];
+    draw_text(b,190,140,"TITLE DETAILS",5,ACCENT_SOFT);
+    draw_rect(b,190,220,360,540,SURFACE);if(card->poster.pixels)draw_image(b,&card->poster,190,220,360,540);
+    char title[41]={0};strncpy(title,card->name,sizeof(title)-1);draw_text(b,610,230,title,strlen(title)>22?3:5,INK);
+    draw_text(b,610,310,card->type,4,ACCENT_SOFT);draw_text(b,830,310,card->year,4,INK_2);
+    draw_wrapped(b,610,390,card->description[0]?card->description:"DESCRIPTION NOT AVAILABLE",52,8);
+    draw_rect(b,610,790,440,80,ACCENT);draw_text(b,650,818,"FIND STREAMS",4,INK);
+    draw_text(b,610,920,"CROSS STREAMS   CIRCLE BACK",3,INK_2);
+}
 static void draw_footer(void *b,const AppState *s){
     draw_rect(b,140,1008,1780,72,0xff171117u);draw_text(b,190,1030,s->rail_focus?"UP DOWN SELECT   CROSS OPEN":"DPAD NAVIGATE   TRIANGLE SEARCH",3,INK_2);
     draw_text(b,1410,1030,"L ONE R ONE PAGES   CIRCLE BACK",3,INK_2);
 }
 static void draw_screen(void *b,const AppState *s){
     fill_buffer(b,GROUND);draw_rail(b,s);draw_topbar(b,s);
-    if(s->search){draw_text(b,190,190,"SEARCH",7,INK);draw_text(b,190,290,"ON SCREEN KEYBOARD COMING WITH NETWORK SEARCH",4,INK_2);
+    if(s->detail)draw_detail(b,s);
+    else if(s->search){draw_text(b,190,190,"SEARCH",7,INK);draw_text(b,190,290,"ON SCREEN KEYBOARD COMING WITH NETWORK SEARCH",4,INK_2);
         draw_rect(b,190,390,1450,260,SURFACE);draw_text(b,250,485,"PRESS TRIANGLE OR CIRCLE TO RETURN",4,ACCENT_SOFT);}
     else switch(s->page){case 0:draw_board(b,s);break;case 1:draw_discover(b,s);break;case 2:draw_library(b,s);break;case 3:draw_addons(b,s);break;default:draw_settings(b,s);}
     draw_footer(b,s);
@@ -229,6 +262,7 @@ static int open_pad(void){
 }
 static void reset_cursor(AppState *s){s->row=0;s->column=0;}
 static int route_input(AppState *s,uint32_t pressed){
+    if(s->detail){if(pressed&ORBIS_PAD_BUTTON_CIRCLE)s->detail=0;return pressed!=0;}
     if(s->search){if(pressed&(ORBIS_PAD_BUTTON_TRIANGLE|ORBIS_PAD_BUTTON_CIRCLE))s->search=0;return pressed!=0;}
     if(pressed&ORBIS_PAD_BUTTON_TRIANGLE){s->search=1;return 1;}
     if(pressed&ORBIS_PAD_BUTTON_L1){s->page=(s->page+PAGE_COUNT-1)%PAGE_COUNT;s->rail_focus=0;reset_cursor(s);return 1;}
@@ -240,6 +274,9 @@ static int route_input(AppState *s,uint32_t pressed){
     if(pressed&ORBIS_PAD_BUTTON_UP){if((s->page==0||s->page>=3)&&s->row>0)--s->row;}
     if(pressed&ORBIS_PAD_BUTTON_DOWN){if(s->page==0&&s->row<1){++s->row;if(s->column>3)s->column=3;}else if(s->page>=3&&s->row<3)++s->row;}
     if((pressed&ORBIS_PAD_BUTTON_CROSS)&&s->page==4)s->settings[s->row]^=1;
+    else if((pressed&ORBIS_PAD_BUTTON_CROSS)&&catalog_status==2&&s->page<3){
+        int index=s->page==0?s->row*5+s->column:s->column;if(index<catalog_count){s->detail_index=index;s->detail=1;}
+    }
     if(pressed&ORBIS_PAD_BUTTON_CIRCLE){if(s->page!=0){s->page=0;reset_cursor(s);}else return -1;}return pressed!=0;
 }
 int main(void){
