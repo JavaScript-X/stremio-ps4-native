@@ -44,9 +44,9 @@ make BUILD_MODE=videoout
 
 Version 0.06 displayed a stable Stremio-purple 1080p frame on firmware 13.02
 with GoldHEN 2.4b18.12, validating direct VideoOut and confirming Piglet as the
-old crash boundary. Version 0.07 adds DualShock 4 validation: Cross toggles the
-screen between two purple shades and Circle closes the title through System
-Service.
+old crash boundary. Version 0.07 validated DualShock 4 input and clean shutdown.
+Version 0.08 adds the first native framebuffer UI shell: five labeled Stremio
+sections, visible focus, D-pad navigation and Circle exit.
 
 The output is `dist-ps4/IV0000-BREW00991_00-STREMIOPS4000000.pkg`.
 It is a bring-up build, not the Stremio application: on compatible jailbroken
