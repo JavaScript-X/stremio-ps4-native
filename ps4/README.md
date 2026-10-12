@@ -92,6 +92,10 @@ Version 0.21 replaces the bring-up bitmap alphabet with a cached native atlas
 generated from the same bundled Inter typeface used by the PS5 UI. It adds real
 glyph metrics and punctuation, mixed-case presentation, and properly clipped
 rounded poster artwork without changing the stable VideoOut backend.
+Version 0.22 rebuilds Addons as a PS5-style two-column tile grid with matching
+controller navigation, enriches Library with filters and counts, fills the title
+page with an About panel and metadata badges, and makes stream empty states
+reflect the source that was actually checked.
 
 The output is `dist-ps4/IV0000-BREW00991_00-STREMIOPS4000000.pkg`.
 The current package is a native 1080p VideoOut application using DualShock 4

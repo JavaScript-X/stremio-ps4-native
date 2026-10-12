@@ -38,7 +38,7 @@ typedef struct AppState {
 static const char *PAGE_NAMES[PAGE_COUNT]={"Board","Discover","Library","Addons","Settings"};
 static const char *ICON_NAMES[PAGE_COUNT]={"nav_board","nav_discover","nav_library","nav_addons","nav_settings"};
 static Image logo, wordmark, search_icon, cross_icon, circle_icon, triangle_icon, square_icon, options_icon;
-static Image dpad_icon, l1_icon, r1_icon, play_icon, nav_line[PAGE_COUNT], nav_solid[PAGE_COUNT];
+static Image dpad_icon, l1_icon, r1_icon, play_icon, check_icon, chevron_icon, nav_line[PAGE_COUNT], nav_solid[PAGE_COUNT];
 static unsigned char *font_atlas;static stbtt_bakedchar font_chars[96];static int font_ready;
 typedef struct CatalogCard {
     char id[24], name[40], type[12], year[16], runtime[24], rating[12], genres[96];
@@ -282,7 +282,8 @@ static void load_assets(void){
     load_font();
     logo=load_image("logo.png");wordmark=load_image("name.png");search_icon=load_image("search.png");
     cross_icon=load_image("cross.png");circle_icon=load_image("circle.png");triangle_icon=load_image("triangle.png");square_icon=load_image("square.png");options_icon=load_image("options.png");
-    dpad_icon=load_image("dpad.png");l1_icon=load_image("l1.png");r1_icon=load_image("r1.png");play_icon=load_image("play.png");char name[64];
+    dpad_icon=load_image("dpad.png");l1_icon=load_image("l1.png");r1_icon=load_image("r1.png");play_icon=load_image("play.png");
+    check_icon=load_image("check.png");chevron_icon=load_image("chevron_right.png");char name[64];
     for(int i=0;i<PAGE_COUNT;++i){strcpy(name,ICON_NAMES[i]);strcat(name,".png");nav_line[i]=load_image(name);
         strcpy(name,ICON_NAMES[i]);strcat(name,"_o.png");nav_solid[i]=load_image(name);}
     sceKernelDebugOutText(0,"[stremio-ps4] PS5 assets: logo=%dx%d\n",logo.width,logo.height);
@@ -334,6 +335,7 @@ static void draw_board(void *b,const AppState *s){
     const char *status=catalog_status==1?"CONNECTING":catalog_status==2?(poster_count==catalog_count?"LIVE MOVIES AND SERIES":poster_count?"PARTIAL POSTERS":"LIVE CINEMETA"):
         catalog_status==3?"NETWORK INIT FAILED":catalog_status==4?"CATALOG REQUEST FAILED":catalog_status==5?"CATALOG PARSE FAILED":"OFFLINE CONTENT";
     draw_text(b,1110,150,status,3,catalog_status==2?ACCENT_SOFT:INK_3);
+    draw_round_rect(b,1540,134,176,44,22,SURFACE);draw_text(b,1570,146,"10 titles",2,INK_2);
     draw_text(b,190,568,"Popular series",5,INK);
     for(int i=0;i<5;++i){int index=5+i;const char *label=index<catalog_count?live_cards[index].name:"SERIES";
         draw_card(b,190+i*290,628,250,300,index,!s->rail_focus&&s->row==1&&s->column==i,label);}
@@ -349,18 +351,23 @@ static void draw_discover(void *b,const AppState *s){
     draw_image(b,&square_icon,190,800,38,38);draw_text(b,244,810,"SWITCH MOVIES SERIES",3,INK_3);
 }
 static void draw_library(void *b,const AppState *s){
-    draw_text(b,190,154,"Library",6,INK_2);draw_text(b,190,220,"Your saved movies and series",3,INK_3);int count=0;
-    for(int i=0;i<5;++i){int index=saved_index(i);if(index<0)break;draw_card(b,190+i*290,330,250,360,index,!s->rail_focus&&s->column==i,live_cards[index].name);++count;}
-    if(!count){draw_round_rect(b,190,330,1100,190,30,SURFACE);draw_text(b,250,395,"SAVE A TITLE WITH SQUARE",4,INK_2);}
-    draw_round_rect(b,190,780,540,72,36,0xff563aa7u);draw_text(b,242,803,"LOCAL PS FOUR LIBRARY",4,INK);
+    draw_text(b,190,154,"Library",6,INK_2);int count=0;for(int i=0;i<15;++i)if(live_cards[i].saved&&live_cards[i].name[0])++count;
+    char summary[64];snprintf(summary,sizeof(summary),"%d saved title%s",count,count==1?"":"s");draw_text(b,190,210,summary,3,INK_3);
+    const char *filters[]={"All","Movies","Series"};for(int i=0;i<3;++i){draw_round_rect(b,190+i*210,252,190,54,27,i==0?0xff563aa7u:SURFACE);draw_text(b,225+i*210,268,filters[i],3,INK);}
+    int shown=0;for(int i=0;i<5;++i){int index=saved_index(i);if(index<0)break;draw_card(b,190+i*290,350,250,360,index,!s->rail_focus&&s->column==i,live_cards[index].name);++shown;}
+    if(!shown){draw_round_rect(b,190,350,1100,190,30,SURFACE);draw_text(b,250,405,"Your library is empty",4,INK);draw_text(b,250,462,"Save any title with Square",3,INK_3);}
+    draw_round_rect(b,190,805,500,64,32,SURFACE_HI);draw_image(b,&check_icon,212,818,36,36);draw_text(b,266,824,"Saved locally on PS4",3,INK_2);
 }
 static void draw_addons(void *b,const AppState *s){
-    draw_text(b,190,154,"Addons",6,INK_2);draw_text(b,190,220,"Manage your Stremio sources",3,INK_3);
+    draw_text(b,190,154,"Addons",6,INK_2);draw_text(b,190,210,"2 installed addons",3,INK_3);
     const char *names[]={"CINEMETA","PUBLIC DOMAIN","LOCAL FILES","COMMUNITY"};
-    for(int i=0;i<4;++i){int y=300+i*145;draw_round_rect(b,190,y,1340,116,28,!s->rail_focus&&s->row==i?SURFACE_HI:SURFACE);
-        int enabled=i==0||(i==1&&public_domain_enabled);draw_round_rect(b,214,y+18,80,80,20,enabled?0xff563aa7u:0xff584667u);draw_text(b,330,y+26,names[i],5,INK);
+    const char *descriptions[]={"Movies and series metadata","Classic films with legal streams","Play media from USB storage","Install addons from a manifest URL"};
+    for(int i=0;i<4;++i){int col=i%2,row=i/2,x=190+col*690,y=270+row*280;draw_round_rect(b,x,y,650,240,30,!s->rail_focus&&s->row==i?SURFACE_HI:SURFACE);
+        int enabled=i==0||(i==1&&public_domain_enabled);draw_round_rect(b,x+26,y+26,86,86,22,enabled?0xff563aa7u:0xff584667u);draw_text(b,x+145,y+32,names[i],4,INK);
         const char *status=i==0?"INSTALLED":i==1?(public_domain_enabled?(public_domain_online?"ONLINE":"ENABLED - CROSS TO CHECK"):"DISABLED"):"AVAILABLE";
-        draw_text(b,330,y+76,status,3,enabled?ACCENT_SOFT:INK_3);if(!s->rail_focus&&s->row==i)draw_focus(b,190,y,1340,116);}
+        draw_text(b,x+145,y+74,status,3,enabled?ACCENT_SOFT:INK_3);draw_text(b,x+28,y+150,descriptions[i],3,INK_2);
+        draw_round_rect(b,x+28,y+194,110,30,15,0xff3b343du);draw_text(b,x+48,y+201,i<2?"Movies":"Source",2,INK_2);
+        if(i>=2)draw_image(b,&chevron_icon,x+590,y+100,30,30);if(!s->rail_focus&&s->row==i)draw_focus(b,x,y,650,240);}
 }
 static void draw_wrapped(void *b,int x,int y,const char *text,int columns,int lines);
 static void draw_settings(void *b,const AppState *s){
@@ -399,9 +406,12 @@ static void draw_detail(void *b,const AppState *s){
     draw_text(b,190,140,"TITLE DETAILS",5,ACCENT_SOFT);
     draw_round_rect(b,190,220,360,540,24,SURFACE);if(card->poster.pixels)draw_image_rounded(b,&card->poster,190,220,360,540,24);
     char title[41]={0};strncpy(title,card->name,sizeof(title)-1);draw_text(b,610,230,title,strlen(title)>22?3:5,INK);
-    draw_text(b,610,310,card->type,4,ACCENT_SOFT);draw_text(b,830,310,card->year,4,INK_2);
-    draw_text(b,610,360,card->runtime,3,INK_2);draw_text(b,790,360,card->rating,3,0xff18c5f5u);draw_text(b,940,360,card->genres,2,INK_3);
-    draw_wrapped(b,610,420,card->description[0]?card->description:"DESCRIPTION NOT AVAILABLE",52,7);
+    draw_round_rect(b,610,305,150,48,24,0xff432d6fu);draw_text(b,642,318,card->type,3,ACCENT_SOFT);draw_text(b,800,318,card->year,3,INK_2);
+    draw_text(b,610,375,card->runtime,3,INK_2);draw_round_rect(b,770,364,104,40,10,0xff18c5f5u);draw_text(b,790,375,card->rating,3,0xff0c0b11u);draw_text(b,915,375,card->genres,2,INK_3);
+    draw_wrapped(b,610,420,card->description[0]?card->description:"DESCRIPTION NOT AVAILABLE",43,7);
+    draw_round_rect(b,1300,220,430,380,30,SURFACE);draw_text(b,1340,260,"About",4,INK);draw_text(b,1340,330,"Type",2,INK_3);draw_text(b,1480,327,card->type,3,INK_2);
+    draw_text(b,1340,390,"Released",2,INK_3);draw_text(b,1480,387,card->year,3,INK_2);draw_text(b,1340,450,"Runtime",2,INK_3);draw_text(b,1480,447,card->runtime,3,INK_2);
+    draw_text(b,1340,510,"Rating",2,INK_3);draw_text(b,1480,507,card->rating,3,0xff18c5f5u);
     draw_round_rect(b,610,790,440,80,40,0xff563aa7u);draw_image(b,&play_icon,638,808,44,44);draw_text(b,706,818,"FIND STREAMS",4,INK);
     draw_image(b,&cross_icon,610,902,38,38);draw_text(b,660,912,"STREAMS",3,INK_2);
     draw_image(b,&square_icon,830,902,38,38);draw_text(b,880,912,card->saved?"REMOVE":"SAVE",3,INK_2);
@@ -410,7 +420,9 @@ static void draw_detail(void *b,const AppState *s){
 static void draw_streams(void *b,const AppState *s){
     CatalogCard *card=&live_cards[s->detail_index];draw_text(b,190,140,"STREAM SOURCES",6,INK);
     draw_text(b,190,220,card->name,4,ACCENT_SOFT);draw_round_rect(b,190,300,1420,280,32,SURFACE);
-    draw_text(b,250,370,"NO STREAM ADDON IS INSTALLED",5,INK);draw_text(b,250,450,"OPEN ADDONS TO CONFIGURE A SOURCE",3,INK_2);
+    if(public_domain_enabled&&public_domain_online){draw_round_rect(b,230,340,84,84,42,0xff315d3fu);draw_image(b,&check_icon,252,362,40,40);
+        draw_text(b,350,360,"No compatible streams found",5,INK);draw_text(b,350,435,"Public Domain was checked for this title",3,INK_2);}
+    else {draw_text(b,250,370,"No stream addon is installed",5,INK);draw_text(b,250,450,"Open Addons to configure a source",3,INK_2);}
     draw_round_rect(b,250,630,500,82,41,0xff563aa7u);draw_image(b,&cross_icon,278,652,38,38);draw_text(b,340,654,"OPEN ADDONS",4,INK);
     draw_image(b,&circle_icon,250,790,38,38);draw_text(b,304,800,"BACK TO DETAILS",3,INK_2);
 }
@@ -501,12 +513,18 @@ static int route_input(AppState *s,uint32_t pressed){
     if(pressed&ORBIS_PAD_BUTTON_R1){s->page=(s->page+1)%PAGE_COUNT;s->rail_focus=0;reset_cursor(s);return 1;}
     if(s->rail_focus){if((pressed&ORBIS_PAD_BUTTON_UP)&&s->row>0)--s->row;if((pressed&ORBIS_PAD_BUTTON_DOWN)&&s->row<PAGE_COUNT-1)++s->row;
         if(pressed&(ORBIS_PAD_BUTTON_RIGHT|ORBIS_PAD_BUTTON_CROSS)){s->page=s->row;s->rail_focus=0;reset_cursor(s);}if(pressed&ORBIS_PAD_BUTTON_CIRCLE){s->rail_focus=0;reset_cursor(s);}return pressed!=0;}
+    if(s->page==3){
+        if(pressed&ORBIS_PAD_BUTTON_LEFT){if((s->row%2)==1)--s->row;else{s->rail_focus=1;s->row=s->page;}}
+        if((pressed&ORBIS_PAD_BUTTON_RIGHT)&&(s->row%2)==0)++s->row;
+        if((pressed&ORBIS_PAD_BUTTON_UP)&&s->row>=2)s->row-=2;if((pressed&ORBIS_PAD_BUTTON_DOWN)&&s->row<2)s->row+=2;
+        if((pressed&ORBIS_PAD_BUTTON_CROSS)&&s->row==1){public_domain_enabled^=1;save_account();validate_public_domain();}
+        if(pressed&ORBIS_PAD_BUTTON_CIRCLE){s->page=0;reset_cursor(s);}return pressed!=0;
+    }
     if(pressed&ORBIS_PAD_BUTTON_LEFT){if(s->column>0&&s->page<3)--s->column;else{s->rail_focus=1;s->row=s->page;}}
     if((pressed&ORBIS_PAD_BUTTON_RIGHT)&&s->page<3&&s->column<4)++s->column;
     if(pressed&ORBIS_PAD_BUTTON_UP){if((s->page==0||s->page>=3)&&s->row>0)--s->row;}
     if(pressed&ORBIS_PAD_BUTTON_DOWN){if(s->page==0&&s->row<1){++s->row;if(s->column>3)s->column=3;}else if(s->page==3&&s->row<3)++s->row;else if(s->page==4&&s->row<4)++s->row;}
     if((pressed&ORBIS_PAD_BUTTON_CROSS)&&s->page==4){if(s->row==4){s->account=1;if(!auth_key[0]&&!link_code[0])create_device_link();}else{s->settings[s->row]^=1;save_state(s);}}
-    else if((pressed&ORBIS_PAD_BUTTON_CROSS)&&s->page==3&&s->row==1){public_domain_enabled^=1;save_account();validate_public_domain();}
     else if((pressed&ORBIS_PAD_BUTTON_CROSS)&&catalog_status==2&&s->page<3){
         int index=s->page==0?s->row*5+s->column:s->page==2?saved_index(s->column):s->column+(s->page==1&&s->discover_series?5:0);
         if(index>=0&&index<15&&live_cards[index].name[0]){s->detail_index=index;load_metadata(&live_cards[index]);s->detail=1;}

@@ -21,6 +21,9 @@ account, addon, search, library, detail, and source screens.
 Version 0.21 replaces the temporary bitmap alphabet with the PS5 port's bundled
 Inter typeface, real glyph spacing and punctuation, mixed-case labels, and
 rounded clipping for poster artwork.
+Version 0.22 adds the PS5 two-column addon tiles and matching grid navigation,
+library filters and counts, richer title metadata panels, addon-aware stream
+empty states, additional PS5 icons, and denser Board status presentation.
 
 The upstream PS5 documentation is retained below while features are moved to
 the PS4 platform layer. PS5 installation instructions and artifacts do not
