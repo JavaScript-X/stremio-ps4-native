@@ -72,6 +72,10 @@ details action now use packaged Triangle/D-pad/L1/R1/Cross/Circle/Play assets.
 Version 0.16 replaces the search placeholder with a controller-driven keyboard,
 editable queries, delete/space/go actions, live Cinemeta movie search, five
 poster results, result navigation, and result-to-details routing.
+Version 0.17 ports the PS5 metadata-on-open flow for full descriptions, runtime,
+rating and genres. Square now saves/removes titles in a working local-session
+Library, and Find Streams opens a routed source screen that links to Addons when
+no stream provider has been configured.
 
 The output is `dist-ps4/IV0000-BREW00991_00-STREMIOPS4000000.pkg`.
 It is a bring-up build, not the Stremio application: on compatible jailbroken

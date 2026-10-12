@@ -28,7 +28,7 @@ static const uint32_t ACCENT=0xfff55b7bu, ACCENT_SOFT=0xffff8ba5u;
 static const uint32_t INK=0xfff7f7f7u, INK_2=0xffc8c8c8u, INK_3=0xff8f8f8fu;
 typedef struct Image { unsigned char *pixels; int width, height; } Image;
 typedef struct AppState {
-    int page, rail_focus, row, column, search, detail, detail_index;
+    int page, rail_focus, row, column, search, detail, streams, detail_index;
     int keyboard, search_cursor, result_focus; char query[24]; int settings[4];
 } AppState;
 static const char *PAGE_NAMES[PAGE_COUNT]={"BOARD","DISCOVER","LIBRARY","ADDONS","SETTINGS"};
@@ -36,8 +36,8 @@ static const char *ICON_NAMES[PAGE_COUNT]={"nav_board","nav_discover","nav_libra
 static Image logo, wordmark, search_icon, cross_icon, circle_icon, triangle_icon, square_icon;
 static Image dpad_icon, l1_icon, r1_icon, play_icon, nav_line[PAGE_COUNT], nav_solid[PAGE_COUNT];
 typedef struct CatalogCard {
-    char id[24], name[40], type[12], year[16], description[640], poster_url[384];
-    Image poster;
+    char id[24], name[40], type[12], year[16], runtime[24], rating[12], genres[96];
+    char description[640], poster_url[384]; Image poster; int saved, metadata_loaded;
 } CatalogCard;
 static CatalogCard live_cards[15];
 static int catalog_count;
@@ -128,6 +128,23 @@ static void run_search(const char *query){
             card->poster.pixels=stbi_load_from_memory(encoded,(int)image_size,&card->poster.width,&card->poster.height,&channels,4);free(encoded);}}
     search_status=2;
 }
+
+static void parse_genres(const char *json,char *out,size_t capacity){
+    const char *p=strstr(json,"\"genres\":[");size_t used=0;if(!p){out[0]=0;return;}p+=10;
+    while(*p&&*p!=']'&&used+2<capacity){while(*p&&*p!='\"'&&*p!=']')++p;if(*p!= '\"')break;++p;
+        if(used&&used+3<capacity){out[used++]=' ';out[used++]=' ';}while(*p&&*p!='\"'&&used+1<capacity){char c=*p++;out[used++]=c>='a'&&c<='z'?c-32:c;}if(*p=='\"')++p;}out[used]=0;
+}
+static void load_metadata(CatalogCard *card){
+    if(card->metadata_loaded||!card->id[0])return;char url[256];strcpy(url,"https://v3-cinemeta.strem.io/meta/");
+    strcat(url,card->type[0]?card->type:"MOVIE");for(char *p=url;*p;++p)if(*p>='A'&&*p<='Z')*p+=32;
+    strcat(url,"/");strcat(url,card->id);strcat(url,".json");size_t size=0;unsigned char *json=http_get(url,1024*1024,&size);
+    if(!json)return;const char *p=(char*)json;const char *v;
+    if((v=strstr(p,"\"description\":\"")))json_value(v,"\"description\":\"",card->description,sizeof(card->description),1);
+    if((v=strstr(p,"\"runtime\":\"")))json_value(v,"\"runtime\":\"",card->runtime,sizeof(card->runtime),1);
+    if((v=strstr(p,"\"imdbRating\":\"")))json_value(v,"\"imdbRating\":\"",card->rating,sizeof(card->rating),1);
+    parse_genres(p,card->genres,sizeof(card->genres));card->metadata_loaded=1;free(json);
+}
+static int saved_index(int slot){int found=0;for(int i=0;i<15;++i)if(live_cards[i].saved&&live_cards[i].name[0]){if(found==slot)return i;++found;}return -1;}
 
 static void park_error(const char *message,int code){
     sceKernelDebugOutText(0,"[stremio-ps4] %s: 0x%08x\n",message,(unsigned)code);
@@ -229,9 +246,10 @@ static void draw_discover(void *b,const AppState *s){
     draw_text(b,190,800,"CHANGE FILTERS WITH CROSS",3,INK_3);
 }
 static void draw_library(void *b,const AppState *s){
-    draw_text(b,190,154,"LIBRARY",7,INK);draw_text(b,190,232,"YOUR SAVED MOVIES AND SERIES",3,INK_2);
-    for(int i=0;i<5;++i)draw_card(b,190+i*290,330,250,360,i+1,!s->rail_focus&&s->column==i,"SAVED");
-    draw_rect(b,190,780,540,82,ACCENT);draw_text(b,230,808,"SIGN IN TO SYNC LIBRARY",4,INK);
+    draw_text(b,190,154,"LIBRARY",7,INK);draw_text(b,190,232,"YOUR SAVED MOVIES AND SERIES",3,INK_2);int count=0;
+    for(int i=0;i<5;++i){int index=saved_index(i);if(index<0)break;draw_card(b,190+i*290,330,250,360,index,!s->rail_focus&&s->column==i,live_cards[index].name);++count;}
+    if(!count){draw_rect(b,190,330,1100,190,SURFACE);draw_text(b,250,395,"SAVE A TITLE WITH SQUARE",4,INK_2);}
+    draw_rect(b,190,780,540,82,ACCENT);draw_text(b,230,808,"LOCAL PS FOUR LIBRARY",4,INK);
 }
 static void draw_addons(void *b,const AppState *s){
     draw_text(b,190,154,"ADDONS",7,INK);draw_text(b,190,232,"MANAGE YOUR STREMIO SOURCES",3,INK_2);
@@ -260,10 +278,19 @@ static void draw_detail(void *b,const AppState *s){
     draw_rect(b,190,220,360,540,SURFACE);if(card->poster.pixels)draw_image(b,&card->poster,190,220,360,540);
     char title[41]={0};strncpy(title,card->name,sizeof(title)-1);draw_text(b,610,230,title,strlen(title)>22?3:5,INK);
     draw_text(b,610,310,card->type,4,ACCENT_SOFT);draw_text(b,830,310,card->year,4,INK_2);
-    draw_wrapped(b,610,390,card->description[0]?card->description:"DESCRIPTION NOT AVAILABLE",52,8);
+    draw_text(b,610,360,card->runtime,3,INK_2);draw_text(b,790,360,card->rating,3,0xff18c5f5u);draw_text(b,940,360,card->genres,2,INK_3);
+    draw_wrapped(b,610,420,card->description[0]?card->description:"DESCRIPTION NOT AVAILABLE",52,7);
     draw_rect(b,610,790,440,80,ACCENT);draw_image(b,&play_icon,638,808,44,44);draw_text(b,706,818,"FIND STREAMS",4,INK);
     draw_image(b,&cross_icon,610,902,38,38);draw_text(b,660,912,"STREAMS",3,INK_2);
-    draw_image(b,&circle_icon,830,902,38,38);draw_text(b,880,912,"BACK",3,INK_2);
+    draw_image(b,&square_icon,830,902,38,38);draw_text(b,880,912,card->saved?"REMOVE":"SAVE",3,INK_2);
+    draw_image(b,&circle_icon,1090,902,38,38);draw_text(b,1140,912,"BACK",3,INK_2);
+}
+static void draw_streams(void *b,const AppState *s){
+    CatalogCard *card=&live_cards[s->detail_index];draw_text(b,190,140,"STREAM SOURCES",6,INK);
+    draw_text(b,190,220,card->name,4,ACCENT_SOFT);draw_rect(b,190,300,1420,280,SURFACE);
+    draw_text(b,250,370,"NO STREAM ADDON IS INSTALLED",5,INK);draw_text(b,250,450,"OPEN ADDONS TO CONFIGURE A SOURCE",3,INK_2);
+    draw_rect(b,250,630,500,82,ACCENT);draw_image(b,&cross_icon,278,652,38,38);draw_text(b,340,654,"OPEN ADDONS",4,INK);
+    draw_image(b,&circle_icon,250,790,38,38);draw_text(b,304,800,"BACK TO DETAILS",3,INK_2);
 }
 static int draw_prompt(void *b,const Image *icon,const char *label,int x,int y){
     draw_image(b,icon,x,y,38,38);draw_text(b,x+50,y+10,label,3,INK_2);return x+50+(int)strlen(label)*18+28;
@@ -291,7 +318,8 @@ static void draw_footer(void *b,const AppState *s){
 }
 static void draw_screen(void *b,const AppState *s){
     fill_buffer(b,GROUND);draw_rail(b,s);draw_topbar(b,s);
-    if(s->detail)draw_detail(b,s);
+    if(s->streams)draw_streams(b,s);
+    else if(s->detail)draw_detail(b,s);
     else if(s->search)draw_search(b,s);
     else switch(s->page){case 0:draw_board(b,s);break;case 1:draw_discover(b,s);break;case 2:draw_library(b,s);break;case 3:draw_addons(b,s);break;default:draw_settings(b,s);}
     draw_footer(b,s);
@@ -303,7 +331,16 @@ static int open_pad(void){
 }
 static void reset_cursor(AppState *s){s->row=0;s->column=0;}
 static int route_input(AppState *s,uint32_t pressed){
-    if(s->detail){if(pressed&ORBIS_PAD_BUTTON_CIRCLE)s->detail=0;return pressed!=0;}
+    if(s->streams){
+        if(pressed&ORBIS_PAD_BUTTON_CIRCLE)s->streams=0;
+        if(pressed&ORBIS_PAD_BUTTON_CROSS){s->streams=0;s->detail=0;s->page=3;s->rail_focus=0;reset_cursor(s);}return pressed!=0;
+    }
+    if(s->detail){
+        if(pressed&ORBIS_PAD_BUTTON_CIRCLE)s->detail=0;
+        if(pressed&ORBIS_PAD_BUTTON_CROSS)s->streams=1;
+        if(pressed&ORBIS_PAD_BUTTON_SQUARE)live_cards[s->detail_index].saved^=1;
+        return pressed!=0;
+    }
     if(s->search){
         size_t length=strlen(s->query);
         if(pressed&ORBIS_PAD_BUTTON_CIRCLE){s->search=0;s->result_focus=0;return 1;}
@@ -312,7 +349,7 @@ static int route_input(AppState *s,uint32_t pressed){
             if((pressed&ORBIS_PAD_BUTTON_LEFT)&&s->search_cursor>0)--s->search_cursor;
             if((pressed&ORBIS_PAD_BUTTON_RIGHT)&&s->search_cursor<search_count-1)++s->search_cursor;
             if(pressed&ORBIS_PAD_BUTTON_DOWN){s->result_focus=0;s->keyboard=0;}
-            if(pressed&ORBIS_PAD_BUTTON_CROSS){s->detail_index=10+s->search_cursor;s->detail=1;}
+            if(pressed&ORBIS_PAD_BUTTON_CROSS){s->detail_index=10+s->search_cursor;load_metadata(&live_cards[s->detail_index]);s->detail=1;}
             return pressed!=0;
         }
         int col=s->keyboard%10,row=s->keyboard/10;
@@ -340,7 +377,8 @@ static int route_input(AppState *s,uint32_t pressed){
     if(pressed&ORBIS_PAD_BUTTON_DOWN){if(s->page==0&&s->row<1){++s->row;if(s->column>3)s->column=3;}else if(s->page>=3&&s->row<3)++s->row;}
     if((pressed&ORBIS_PAD_BUTTON_CROSS)&&s->page==4)s->settings[s->row]^=1;
     else if((pressed&ORBIS_PAD_BUTTON_CROSS)&&catalog_status==2&&s->page<3){
-        int index=s->page==0?s->row*5+s->column:s->column;if(index<catalog_count){s->detail_index=index;s->detail=1;}
+        int index=s->page==0?s->row*5+s->column:s->page==2?saved_index(s->column):s->column;
+        if(index>=0&&index<15&&live_cards[index].name[0]){s->detail_index=index;load_metadata(&live_cards[index]);s->detail=1;}
     }
     if(pressed&ORBIS_PAD_BUTTON_CIRCLE){if(s->page!=0){s->page=0;reset_cursor(s);}else return -1;}return pressed!=0;
 }
