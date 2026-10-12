@@ -66,6 +66,9 @@ a smaller card-label scale rather than overflowing or disappearing.
 Version 0.14 loads separate live movie and series catalogs with ten poster
 cards, adds vertical row navigation, parses IMDb id/type/year/description, and
 opens a native title-details screen with Cross and returns with Circle.
+Version 0.15 imports the PS5 port's original wordmark and DualShock prompt
+artwork. Search, global navigation, page switching, selection, back, and the
+details action now use packaged Triangle/D-pad/L1/R1/Cross/Circle/Play assets.
 
 The output is `dist-ps4/IV0000-BREW00991_00-STREMIOPS4000000.pkg`.
 It is a bring-up build, not the Stremio application: on compatible jailbroken

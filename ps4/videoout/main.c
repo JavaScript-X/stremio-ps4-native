@@ -30,7 +30,8 @@ typedef struct Image { unsigned char *pixels; int width, height; } Image;
 typedef struct AppState { int page, rail_focus, row, column, search, detail, detail_index; int settings[4]; } AppState;
 static const char *PAGE_NAMES[PAGE_COUNT]={"BOARD","DISCOVER","LIBRARY","ADDONS","SETTINGS"};
 static const char *ICON_NAMES[PAGE_COUNT]={"nav_board","nav_discover","nav_library","nav_addons","nav_settings"};
-static Image logo, search_icon, nav_line[PAGE_COUNT], nav_solid[PAGE_COUNT];
+static Image logo, wordmark, search_icon, cross_icon, circle_icon, triangle_icon;
+static Image dpad_icon, l1_icon, r1_icon, play_icon, nav_line[PAGE_COUNT], nav_solid[PAGE_COUNT];
 typedef struct CatalogCard {
     char id[24], name[40], type[12], year[16], description[640], poster_url[384];
     Image poster;
@@ -152,7 +153,9 @@ static Image load_image(const char *name){
     return image;
 }
 static void load_assets(void){
-    logo=load_image("logo.png");search_icon=load_image("search.png");char name[64];
+    logo=load_image("logo.png");wordmark=load_image("name.png");search_icon=load_image("search.png");
+    cross_icon=load_image("cross.png");circle_icon=load_image("circle.png");triangle_icon=load_image("triangle.png");
+    dpad_icon=load_image("dpad.png");l1_icon=load_image("l1.png");r1_icon=load_image("r1.png");play_icon=load_image("play.png");char name[64];
     for(int i=0;i<PAGE_COUNT;++i){strcpy(name,ICON_NAMES[i]);strcat(name,".png");nav_line[i]=load_image(name);
         strcpy(name,ICON_NAMES[i]);strcat(name,"_o.png");nav_solid[i]=load_image(name);}
     sceKernelDebugOutText(0,"[stremio-ps4] PS5 assets: logo=%dx%d\n",logo.width,logo.height);
@@ -187,7 +190,8 @@ static void draw_rail(void *b,const AppState *s){
 static void draw_topbar(void *b,const AppState *s){
     int x=190,y=34,w=620,h=60;draw_rect(b,x,y,w,h,s->search?SURFACE_HI:SURFACE);
     draw_image(b,&search_icon,x+22,y+16,28,28);draw_text(b,x+72,y+20,s->search?"SEARCH MODE":"SEARCH MOVIES AND SERIES",3,s->search?INK:INK_3);
-    if(s->search)draw_focus(b,x,y,w,h);draw_text(b,1600,54,"STREMIO PS FOUR",3,INK_2);
+    draw_image(b,&triangle_icon,x+w-48,y+14,32,32);if(s->search)draw_focus(b,x,y,w,h);
+    if(wordmark.pixels)draw_image(b,&wordmark,1640,42,220,42);else draw_text(b,1600,54,"STREMIO PS FOUR",3,INK_2);
 }
 static void draw_board(void *b,const AppState *s){
     draw_text(b,190,130,"POPULAR MOVIES",5,INK);draw_text(b,190,178,"LIVE CINEMETA CATALOGS",3,INK_2);
@@ -240,12 +244,18 @@ static void draw_detail(void *b,const AppState *s){
     char title[41]={0};strncpy(title,card->name,sizeof(title)-1);draw_text(b,610,230,title,strlen(title)>22?3:5,INK);
     draw_text(b,610,310,card->type,4,ACCENT_SOFT);draw_text(b,830,310,card->year,4,INK_2);
     draw_wrapped(b,610,390,card->description[0]?card->description:"DESCRIPTION NOT AVAILABLE",52,8);
-    draw_rect(b,610,790,440,80,ACCENT);draw_text(b,650,818,"FIND STREAMS",4,INK);
-    draw_text(b,610,920,"CROSS STREAMS   CIRCLE BACK",3,INK_2);
+    draw_rect(b,610,790,440,80,ACCENT);draw_image(b,&play_icon,638,808,44,44);draw_text(b,706,818,"FIND STREAMS",4,INK);
+    draw_image(b,&cross_icon,610,902,38,38);draw_text(b,660,912,"STREAMS",3,INK_2);
+    draw_image(b,&circle_icon,830,902,38,38);draw_text(b,880,912,"BACK",3,INK_2);
+}
+static int draw_prompt(void *b,const Image *icon,const char *label,int x,int y){
+    draw_image(b,icon,x,y,38,38);draw_text(b,x+50,y+10,label,3,INK_2);return x+50+(int)strlen(label)*18+28;
 }
 static void draw_footer(void *b,const AppState *s){
-    draw_rect(b,140,1008,1780,72,0xff171117u);draw_text(b,190,1030,s->rail_focus?"UP DOWN SELECT   CROSS OPEN":"DPAD NAVIGATE   TRIANGLE SEARCH",3,INK_2);
-    draw_text(b,1410,1030,"L ONE R ONE PAGES   CIRCLE BACK",3,INK_2);
+    draw_rect(b,140,1008,1780,72,0xff171117u);int x=190;
+    x=draw_prompt(b,&dpad_icon,"NAVIGATE",x,1025);x=draw_prompt(b,&cross_icon,s->rail_focus?"OPEN":"SELECT",x,1025);
+    x=draw_prompt(b,&triangle_icon,"SEARCH",x,1025);x=draw_prompt(b,&l1_icon,"PAGES",x,1025);
+    x=draw_prompt(b,&r1_icon,"PAGES",x,1025);draw_prompt(b,&circle_icon,"BACK",x,1025);
 }
 static void draw_screen(void *b,const AppState *s){
     fill_buffer(b,GROUND);draw_rail(b,s);draw_topbar(b,s);
