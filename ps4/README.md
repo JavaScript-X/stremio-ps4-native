@@ -84,6 +84,10 @@ code, checks approval, stores linked state separately from normal preferences,
 restores it after relaunch, and supports unlinking. Public Domain on the Addons
 page can now be enabled, disabled, and validated against its live manifest.
 Authenticated library/addon sync is prepared but not yet claimed complete.
+Version 0.20 ports the PS5 interface styling into the direct VideoOut renderer:
+rounded panels and pills, violet layered backgrounds, softer navigation states,
+PS5-style poster cards and focus rings, a contextual two-column Settings page,
+and redesigned account, addon, library, search, detail, and stream layouts.
 
 The output is `dist-ps4/IV0000-BREW00991_00-STREMIOPS4000000.pkg`.
 The current package is a native 1080p VideoOut application using DualShock 4

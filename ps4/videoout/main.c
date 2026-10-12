@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 #define STBI_ONLY_PNG
 #define STBI_ONLY_JPEG
 #define STBI_NO_HDR
@@ -214,6 +215,28 @@ static void draw_rect(void *buffer,int x,int y,int w,int h,uint32_t color){
     uint32_t *pixels=(uint32_t*)buffer;
     for(int row=y;row<y+h;++row) for(int col=x;col<x+w;++col) pixels[(size_t)row*WIDTH+col]=color;
 }
+static void draw_round_rect(void *buffer,int x,int y,int w,int h,int radius,uint32_t color){
+    if(radius<1){draw_rect(buffer,x,y,w,h,color);return;}if(radius>w/2)radius=w/2;if(radius>h/2)radius=h/2;
+    draw_rect(buffer,x+radius,y,w-radius*2,h,color);draw_rect(buffer,x,y+radius,w,h-radius*2,color);
+    for(int dy=0;dy<radius;++dy){int yy=radius-1-dy;int inset=radius-(int)sqrt((double)(radius*radius-yy*yy));
+        draw_rect(buffer,x+inset,y+dy,w-inset*2,1,color);draw_rect(buffer,x+inset,y+h-1-dy,w-inset*2,1,color);}
+}
+static void draw_round_outline(void *b,int x,int y,int w,int h,int radius,int thickness,uint32_t color){
+    draw_rect(b,x+radius,y,w-radius*2,thickness,color);draw_rect(b,x+radius,y+h-thickness,w-radius*2,thickness,color);
+    draw_rect(b,x,y+radius,thickness,h-radius*2,color);draw_rect(b,x+w-thickness,y+radius,thickness,h-radius*2,color);
+    uint32_t *pixels=(uint32_t*)b;int outer=radius*radius,inner=(radius-thickness)*(radius-thickness);
+    for(int py=0;py<radius;++py)for(int px=0;px<radius;++px){int dx=radius-1-px,dy=radius-1-py,d=dx*dx+dy*dy;if(d<=outer&&d>=inner){
+        int xs[4]={x+px,x+w-1-px,x+px,x+w-1-px},ys[4]={y+py,y+py,y+h-1-py,y+h-1-py};
+        for(int q=0;q<4;++q)if(xs[q]>=0&&xs[q]<WIDTH&&ys[q]>=0&&ys[q]<HEIGHT)pixels[(size_t)ys[q]*WIDTH+xs[q]]=color;}}
+}
+static void draw_vgradient(void *b,int x,int y,int w,int h,uint32_t top,uint32_t bottom){
+    for(int row=0;row<h;++row){unsigned t=h>1?(unsigned)(row*255/(h-1)):0;
+        unsigned r=(((top)&255u)*(255-t)+((bottom)&255u)*t)/255,g=(((top>>8)&255u)*(255-t)+((bottom>>8)&255u)*t)/255,bl=(((top>>16)&255u)*(255-t)+((bottom>>16)&255u)*t)/255;
+        draw_rect(b,x,y+row,w,1,0xff000000u|(bl<<16)|(g<<8)|r);}
+}
+static void draw_page_backdrop(void *b){
+    fill_buffer(b,GROUND);draw_vgradient(b,140,0,1780,260,0xff251338u,GROUND);draw_vgradient(b,140,900,1780,180,GROUND,0xff080609u);
+}
 static const uint8_t FONT[27][5]={
  {0,0,0,0,0},{0x7e,0x09,0x09,0x09,0x7e},{0x7f,0x49,0x49,0x49,0x36},
  {0x3e,0x41,0x41,0x41,0x22},{0x7f,0x41,0x41,0x22,0x1c},{0x7f,0x49,0x49,0x49,0x41},
@@ -258,25 +281,25 @@ static void draw_image(void *buffer,const Image *image,int x,int y,int w,int h){
             *d=0xff000000u|(b<<16)|(g<<8)|r;}}
 }
 static void draw_focus(void *b,int x,int y,int w,int h){
-    draw_rect(b,x-5,y-5,w+10,5,INK);draw_rect(b,x-5,y+h,w+10,5,INK);
-    draw_rect(b,x-5,y,5,h,INK);draw_rect(b,x+w,y,5,h,INK);
+    draw_round_outline(b,x-8,y-8,w+16,h+16,24,4,0xff704bddu);
+    draw_round_outline(b,x-4,y-4,w+8,h+8,20,3,INK);
 }
 static void draw_card(void *b,int x,int y,int w,int h,int seed,int focused,const char *title){
-    static const uint32_t colors[]={0xff7c304fu,0xff735239u,0xff3b626eu,0xff71415eu,0xff4c3978u};
-    draw_rect(b,x,y,w,h,colors[seed%5]);
-    if(seed<15&&live_cards[seed].poster.pixels)draw_image(b,&live_cards[seed].poster,x,y,w,h-70);
-    draw_rect(b,x,y+h-70,w,70,0xff1a151cu);char shown[21]={0};strncpy(shown,title,sizeof(shown)-1);
-    int scale=strlen(shown)>12?2:3;draw_text(b,x+14,y+h-46,shown,scale,INK);if(focused)draw_focus(b,x,y,w,h);
+    static const uint32_t colors[]={0xff49325fu,0xff41305au,0xff34284du,0xff3d2d55u,0xff2c2342u};int poster_h=h-58;
+    draw_round_rect(b,x+8,y+14,w,poster_h,20,0xff050405u);draw_round_rect(b,x,y,w,poster_h,18,colors[seed%5]);
+    if(seed<15&&live_cards[seed].poster.pixels)draw_image(b,&live_cards[seed].poster,x,y,w,poster_h);
+    char shown[21]={0};strncpy(shown,title,sizeof(shown)-1);int scale=strlen(shown)>12?2:3;
+    draw_text(b,x,y+poster_h+20,shown,scale,focused?INK:INK_2);if(focused)draw_focus(b,x,y,w,poster_h);
 }
 static void draw_rail(void *b,const AppState *s){
-    draw_rect(b,0,0,140,HEIGHT,0xff171117u);if(logo.pixels)draw_image(b,&logo,42,30,58,58);else draw_text(b,36,42,"S",7,ACCENT_SOFT);
-    for(int i=0;i<PAGE_COUNT;++i){int y=238+i*138,active=s->page==i,cursor=s->rail_focus&&s->row==i;
-        if(active||cursor)draw_rect(b,20,y,100,104,cursor?ACCENT:SURFACE_HI);
+    draw_vgradient(b,0,0,140,HEIGHT,0xff211724u,0xff100d12u);if(logo.pixels)draw_image(b,&logo,40,28,60,60);else draw_text(b,36,42,"S",7,ACCENT_SOFT);
+    for(int i=0;i<PAGE_COUNT;++i){int y=242+i*120,active=s->page==i,cursor=s->rail_focus&&s->row==i;
+        if(active||cursor)draw_round_rect(b,20,y,100,104,26,cursor?0xff563aa7u:SURFACE_HI);
         draw_image(b,(active||cursor)?&nav_solid[i]:&nav_line[i],46,y+14,48,48);
         draw_text(b,28,y+78,PAGE_NAMES[i],2,(active||cursor)?INK:INK_3);if(cursor)draw_focus(b,20,y,100,104);}
 }
 static void draw_topbar(void *b,const AppState *s){
-    int x=190,y=34,w=620,h=60;draw_rect(b,x,y,w,h,s->search?SURFACE_HI:SURFACE);
+    int x=190,y=34,w=620,h=60;draw_round_rect(b,x,y,w,h,30,s->search?SURFACE_HI:SURFACE);
     draw_image(b,&search_icon,x+22,y+16,28,28);draw_text(b,x+72,y+20,s->search?(s->query[0]?s->query:"SEARCH MODE"):"SEARCH MOVIES AND SERIES",3,s->search?INK:INK_3);
     draw_image(b,&triangle_icon,x+w-48,y+14,32,32);if(s->search)draw_focus(b,x,y,w,h);
     if(wordmark.pixels)draw_image(b,&wordmark,1640,42,220,42);else draw_text(b,1600,54,"STREMIO PS FOUR",3,INK_2);
@@ -294,45 +317,52 @@ static void draw_board(void *b,const AppState *s){
     draw_image(b,&options_icon,1510,950,38,38);draw_text(b,1562,960,"REFRESH",3,INK_3);
 }
 static void draw_discover(void *b,const AppState *s){
-    draw_text(b,190,154,"DISCOVER",7,INK);const char *filters[]={"MOVIES","POPULAR","ALL GENRES"};
+    draw_text(b,190,154,"DISCOVER",6,INK_2);const char *filters[]={"MOVIES","POPULAR","ALL GENRES"};
     filters[0]=s->discover_series?"SERIES":"MOVIES";
-    for(int i=0;i<3;++i){draw_rect(b,190+i*330,238,300,66,i==0?ACCENT:SURFACE);draw_text(b,214+i*330,258,filters[i],3,INK);}
+    for(int i=0;i<3;++i){draw_round_rect(b,190+i*330,228,300,66,33,i==0?0xff563aa7u:SURFACE);draw_text(b,224+i*330,248,filters[i],3,INK);}
     const char *titles[]={"ACTION","DRAMA","COMEDY","THRILLER","FAMILY"};
     int first=s->discover_series?5:0;
     for(int i=0;i<5;++i){int index=first+i;draw_card(b,190+i*290,370,250,360,index,!s->rail_focus&&s->column==i,catalog_status==2&&index<catalog_count?live_cards[index].name:titles[i]);}
     draw_image(b,&square_icon,190,800,38,38);draw_text(b,244,810,"SWITCH MOVIES SERIES",3,INK_3);
 }
 static void draw_library(void *b,const AppState *s){
-    draw_text(b,190,154,"LIBRARY",7,INK);draw_text(b,190,232,"YOUR SAVED MOVIES AND SERIES",3,INK_2);int count=0;
+    draw_text(b,190,154,"LIBRARY",6,INK_2);draw_text(b,190,220,"YOUR SAVED MOVIES AND SERIES",3,INK_3);int count=0;
     for(int i=0;i<5;++i){int index=saved_index(i);if(index<0)break;draw_card(b,190+i*290,330,250,360,index,!s->rail_focus&&s->column==i,live_cards[index].name);++count;}
-    if(!count){draw_rect(b,190,330,1100,190,SURFACE);draw_text(b,250,395,"SAVE A TITLE WITH SQUARE",4,INK_2);}
-    draw_rect(b,190,780,540,82,ACCENT);draw_text(b,230,808,"LOCAL PS FOUR LIBRARY",4,INK);
+    if(!count){draw_round_rect(b,190,330,1100,190,30,SURFACE);draw_text(b,250,395,"SAVE A TITLE WITH SQUARE",4,INK_2);}
+    draw_round_rect(b,190,780,540,72,36,0xff563aa7u);draw_text(b,242,803,"LOCAL PS FOUR LIBRARY",4,INK);
 }
 static void draw_addons(void *b,const AppState *s){
-    draw_text(b,190,154,"ADDONS",7,INK);draw_text(b,190,232,"MANAGE YOUR STREMIO SOURCES",3,INK_2);
+    draw_text(b,190,154,"ADDONS",6,INK_2);draw_text(b,190,220,"MANAGE YOUR STREMIO SOURCES",3,INK_3);
     const char *names[]={"CINEMETA","PUBLIC DOMAIN","LOCAL FILES","COMMUNITY"};
-    for(int i=0;i<4;++i){int y=320+i*145;draw_rect(b,190,y,1340,110,!s->rail_focus&&s->row==i?SURFACE_HI:SURFACE);
-        int enabled=i==0||(i==1&&public_domain_enabled);draw_rect(b,214,y+20,70,70,enabled?ACCENT:0xff584667u);draw_text(b,320,y+26,names[i],5,INK);
+    for(int i=0;i<4;++i){int y=300+i*145;draw_round_rect(b,190,y,1340,116,28,!s->rail_focus&&s->row==i?SURFACE_HI:SURFACE);
+        int enabled=i==0||(i==1&&public_domain_enabled);draw_round_rect(b,214,y+18,80,80,20,enabled?0xff563aa7u:0xff584667u);draw_text(b,330,y+26,names[i],5,INK);
         const char *status=i==0?"INSTALLED":i==1?(public_domain_enabled?(public_domain_online?"ONLINE":"ENABLED - CROSS TO CHECK"):"DISABLED"):"AVAILABLE";
-        draw_text(b,320,y+76,status,3,enabled?ACCENT_SOFT:INK_3);if(!s->rail_focus&&s->row==i)draw_focus(b,190,y,1340,110);}
+        draw_text(b,330,y+76,status,3,enabled?ACCENT_SOFT:INK_3);if(!s->rail_focus&&s->row==i)draw_focus(b,190,y,1340,116);}
 }
+static void draw_wrapped(void *b,int x,int y,const char *text,int columns,int lines);
 static void draw_settings(void *b,const AppState *s){
-    draw_text(b,190,154,"SETTINGS",7,INK);draw_text(b,190,232,"PLAYBACK AND APPLICATION",3,INK_2);
+    draw_text(b,190,154,"SETTINGS",6,INK_2);
     const char *names[]={"BUILTIN TORRENTS","AUTO SUBTITLES","AUTOPLAY NEXT","UI SOUNDS"};
-    for(int i=0;i<4;++i){int y=300+i*115;draw_rect(b,190,y,1200,86,!s->rail_focus&&s->row==i?SURFACE_HI:SURFACE);
-        draw_text(b,230,y+32,names[i],4,INK);draw_rect(b,1190,y+20,160,56,s->settings[i]?ACCENT:0xff514951u);
-        draw_text(b,1230,y+38,s->settings[i]?"ON":"OFF",3,INK);if(!s->rail_focus&&s->row==i)draw_focus(b,190,y,1200,86);}
-    int y=760;draw_rect(b,190,y,1200,96,!s->rail_focus&&s->row==4?SURFACE_HI:SURFACE);draw_text(b,230,y+32,"STREMIO ACCOUNT",4,INK);
-    draw_text(b,1010,y+34,auth_key[0]?"LINKED":"LINK DEVICE",3,auth_key[0]?ACCENT_SOFT:INK_2);if(!s->rail_focus&&s->row==4)draw_focus(b,190,y,1200,96);
+    for(int i=0;i<4;++i){int y=220+i*112;draw_round_rect(b,190,y,950,88,24,!s->rail_focus&&s->row==i?SURFACE_HI:SURFACE);
+        draw_text(b,226,y+32,names[i],4,!s->rail_focus&&s->row==i?INK:INK_2);draw_round_rect(b,1000,y+24,104,42,21,s->settings[i]?0xff563aa7u:0xff514951u);
+        draw_text(b,1025,y+36,s->settings[i]?"ON":"OFF",3,INK);if(!s->rail_focus&&s->row==i)draw_focus(b,190,y,950,88);}
+    int y=668;draw_round_rect(b,190,y,950,88,24,!s->rail_focus&&s->row==4?SURFACE_HI:SURFACE);draw_text(b,226,y+32,"STREMIO ACCOUNT",4,INK_2);
+    draw_text(b,890,y+34,auth_key[0]?"LINKED":"LINK DEVICE",3,auth_key[0]?ACCENT_SOFT:INK_3);if(!s->rail_focus&&s->row==4)draw_focus(b,190,y,950,88);
+    const char *help_title=s->row==0?"BUILTIN TORRENTS":s->row==1?"AUTO SUBTITLES":s->row==2?"AUTOPLAY NEXT":s->row==3?"UI SOUNDS":"STREMIO ACCOUNT";
+    const char *help=s->row==0?"USE STREAM ADDONS DIRECTLY ON THE CONSOLE":s->row==1?"LOAD AVAILABLE SUBTITLES AUTOMATICALLY":s->row==2?"CONTINUE TO THE NEXT EPISODE":s->row==3?"PLAY SOFT SOUNDS WHILE NAVIGATING":"LINK YOUR ACCOUNT WITH A SECURE SHORT CODE";
+    draw_round_outline(b,1200,220,620,536,32,2,0xff514651u);draw_text(b,1245,280,help_title,4,INK);draw_text(b,1245,350,s->row<4?(s->settings[s->row]?"ON":"OFF"):(auth_key[0]?"LINKED":"NOT LINKED"),4,ACCENT_SOFT);
+    draw_wrapped(b,1245,430,help,31,4);draw_round_rect(b,1245,650,230,58,29,INK);draw_image(b,&cross_icon,1260,660,38,38);draw_text(b,1312,670,s->row==4?"OPEN":"SWITCH",3,GROUND);
 }
 static void draw_account(void *b,const AppState *s){
-    (void)s;draw_text(b,190,140,"STREMIO ACCOUNT",6,INK);draw_text(b,190,220,"LINK THIS PS FOUR TO YOUR STREMIO ACCOUNT",3,INK_2);
-    draw_rect(b,190,300,1420,360,SURFACE);
-    if(account_status==4){draw_text(b,250,370,"ACCOUNT LINKED",6,ACCENT_SOFT);draw_text(b,250,470,"YOUR ACCOUNT TOKEN IS SAVED ON THIS CONSOLE",3,INK_2);}
-    else {draw_text(b,250,350,account_status==1?"CREATING CODE":account_status==3?"CHECKING APPROVAL":account_status==5?"LINK SERVICE UNAVAILABLE":"ENTER THIS CODE",4,INK_2);
-        if(link_code[0]){draw_text(b,250,430,link_code,10,ACCENT_SOFT);draw_text(b,250,560,"OPEN LINK STREMIO COM ON YOUR PHONE",3,INK);}}
-    draw_image(b,&cross_icon,250,730,38,38);draw_text(b,304,740,account_status==4?"ACCOUNT LINKED":"CHECK APPROVAL",3,INK_2);
-    draw_image(b,&square_icon,650,730,38,38);draw_text(b,704,740,account_status==4?"UNLINK":"NEW CODE",3,INK_2);draw_image(b,&circle_icon,950,730,38,38);draw_text(b,1004,740,"BACK",3,INK_2);
+    (void)s;draw_text(b,190,140,"STREMIO ACCOUNT",6,INK_2);draw_text(b,190,205,"LINK THIS PS FOUR TO YOUR STREMIO ACCOUNT",3,INK_3);
+    draw_round_rect(b,190,270,1420,430,34,SURFACE);draw_round_rect(b,230,310,180,180,36,0xff3d2a73u);draw_image(b,&logo,280,360,80,80);
+    if(account_status==4){draw_round_rect(b,460,320,270,48,24,0xff315d3fu);draw_text(b,500,334,"ACCOUNT LINKED",3,0xff8cffaau);
+        draw_text(b,460,410,"WELCOME BACK",6,INK);draw_text(b,460,500,"YOUR SECURE ACCOUNT KEY IS SAVED LOCALLY",3,INK_2);draw_text(b,460,550,"LIBRARY AND ADDON SYNC IS BEING PREPARED",3,INK_3);}
+    else {draw_text(b,460,330,account_status==1?"CREATING CODE":account_status==3?"CHECKING APPROVAL":account_status==5?"LINK SERVICE UNAVAILABLE":"ENTER THIS CODE",4,INK_2);
+        if(link_code[0]){draw_round_rect(b,460,390,420,116,28,0xff35264fu);draw_text(b,510,418,link_code,10,ACCENT_SOFT);draw_text(b,460,560,"OPEN LINK STREMIO COM ON YOUR PHONE",3,INK);}}
+    draw_round_rect(b,230,760,350,62,31,INK);draw_image(b,&cross_icon,250,772,38,38);draw_text(b,305,782,account_status==4?"LINKED":"CHECK APPROVAL",3,GROUND);
+    draw_round_rect(b,610,760,290,62,31,SURFACE_HI);draw_image(b,&square_icon,630,772,38,38);draw_text(b,685,782,account_status==4?"UNLINK":"NEW CODE",3,INK);
+    draw_round_rect(b,930,760,220,62,31,SURFACE_HI);draw_image(b,&circle_icon,950,772,38,38);draw_text(b,1005,782,"BACK",3,INK);
 }
 static void draw_wrapped(void *b,int x,int y,const char *text,int columns,int lines){
     char line[64];const char *p=text;
@@ -349,16 +379,16 @@ static void draw_detail(void *b,const AppState *s){
     draw_text(b,610,310,card->type,4,ACCENT_SOFT);draw_text(b,830,310,card->year,4,INK_2);
     draw_text(b,610,360,card->runtime,3,INK_2);draw_text(b,790,360,card->rating,3,0xff18c5f5u);draw_text(b,940,360,card->genres,2,INK_3);
     draw_wrapped(b,610,420,card->description[0]?card->description:"DESCRIPTION NOT AVAILABLE",52,7);
-    draw_rect(b,610,790,440,80,ACCENT);draw_image(b,&play_icon,638,808,44,44);draw_text(b,706,818,"FIND STREAMS",4,INK);
+    draw_round_rect(b,610,790,440,80,40,0xff563aa7u);draw_image(b,&play_icon,638,808,44,44);draw_text(b,706,818,"FIND STREAMS",4,INK);
     draw_image(b,&cross_icon,610,902,38,38);draw_text(b,660,912,"STREAMS",3,INK_2);
     draw_image(b,&square_icon,830,902,38,38);draw_text(b,880,912,card->saved?"REMOVE":"SAVE",3,INK_2);
     draw_image(b,&circle_icon,1090,902,38,38);draw_text(b,1140,912,"BACK",3,INK_2);
 }
 static void draw_streams(void *b,const AppState *s){
     CatalogCard *card=&live_cards[s->detail_index];draw_text(b,190,140,"STREAM SOURCES",6,INK);
-    draw_text(b,190,220,card->name,4,ACCENT_SOFT);draw_rect(b,190,300,1420,280,SURFACE);
+    draw_text(b,190,220,card->name,4,ACCENT_SOFT);draw_round_rect(b,190,300,1420,280,32,SURFACE);
     draw_text(b,250,370,"NO STREAM ADDON IS INSTALLED",5,INK);draw_text(b,250,450,"OPEN ADDONS TO CONFIGURE A SOURCE",3,INK_2);
-    draw_rect(b,250,630,500,82,ACCENT);draw_image(b,&cross_icon,278,652,38,38);draw_text(b,340,654,"OPEN ADDONS",4,INK);
+    draw_round_rect(b,250,630,500,82,41,0xff563aa7u);draw_image(b,&cross_icon,278,652,38,38);draw_text(b,340,654,"OPEN ADDONS",4,INK);
     draw_image(b,&circle_icon,250,790,38,38);draw_text(b,304,800,"BACK TO DETAILS",3,INK_2);
 }
 static int draw_prompt(void *b,const Image *icon,const char *label,int x,int y){
@@ -369,10 +399,10 @@ static void draw_search(void *b,const AppState *s){
     const char *status=search_status==1?"LOADING":search_status==2?"LIVE RESULTS":search_status==3?"NO RESULTS":"TYPE A TITLE";
     draw_text(b,1210,142,status,3,search_status==2?ACCENT_SOFT:INK_3);
     if(search_count){for(int i=0;i<search_count;++i)draw_card(b,190+i*290,190,250,300,10+i,s->result_focus&&s->search_cursor==i,live_cards[10+i].name);}
-    else {draw_rect(b,190,190,1450,300,SURFACE);draw_text(b,250,310,"ENTER A MOVIE NAME THEN CHOOSE GO",4,INK_2);}
+    else {draw_round_rect(b,190,190,1450,300,32,SURFACE);draw_text(b,250,310,"ENTER A MOVIE NAME THEN CHOOSE GO",4,INK_2);}
     static const char *special[]={"SPACE","DELETE","GO"};
     for(int i=0;i<29;++i){int col=i%10,row=i/10,x=190+col*145,y=550+row*100,w=125;
-        int focused=!s->result_focus&&s->keyboard==i;draw_rect(b,x,y,w,72,focused?ACCENT:SURFACE_HI);
+        int focused=!s->result_focus&&s->keyboard==i;draw_round_rect(b,x,y,w,72,18,focused?0xff563aa7u:SURFACE_HI);
         char letter[2]={(char)('A'+i),0};const char *label=i<26?letter:special[i-26];int scale=i<26?4:2;
         draw_text(b,x+(i<26?48:14),y+24,label,scale,INK);if(focused)draw_focus(b,x,y,w,72);}
     draw_image(b,&cross_icon,190,890,38,38);draw_text(b,240,900,"TYPE OR OPEN",3,INK_2);
@@ -380,13 +410,13 @@ static void draw_search(void *b,const AppState *s){
     draw_image(b,&circle_icon,800,890,38,38);draw_text(b,850,900,"CLOSE",3,INK_2);
 }
 static void draw_footer(void *b,const AppState *s){
-    draw_rect(b,140,1008,1780,72,0xff171117u);int x=190;
+    draw_vgradient(b,140,990,1780,90,GROUND,0xff171117u);int x=190;
     x=draw_prompt(b,&dpad_icon,"NAVIGATE",x,1025);x=draw_prompt(b,&cross_icon,s->rail_focus?"OPEN":"SELECT",x,1025);
     x=draw_prompt(b,&triangle_icon,"SEARCH",x,1025);x=draw_prompt(b,&l1_icon,"PAGES",x,1025);
     x=draw_prompt(b,&r1_icon,"PAGES",x,1025);draw_prompt(b,&circle_icon,"BACK",x,1025);
 }
 static void draw_screen(void *b,const AppState *s){
-    fill_buffer(b,GROUND);draw_rail(b,s);draw_topbar(b,s);
+    draw_page_backdrop(b);draw_rail(b,s);draw_topbar(b,s);
     if(s->account)draw_account(b,s);
     else if(s->streams)draw_streams(b,s);
     else if(s->detail)draw_detail(b,s);
