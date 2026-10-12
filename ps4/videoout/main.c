@@ -27,17 +27,21 @@ static const uint32_t GROUND=0xff110b0cu, SURFACE=0xff292328u, SURFACE_HI=0xff3a
 static const uint32_t ACCENT=0xfff55b7bu, ACCENT_SOFT=0xffff8ba5u;
 static const uint32_t INK=0xfff7f7f7u, INK_2=0xffc8c8c8u, INK_3=0xff8f8f8fu;
 typedef struct Image { unsigned char *pixels; int width, height; } Image;
-typedef struct AppState { int page, rail_focus, row, column, search, detail, detail_index; int settings[4]; } AppState;
+typedef struct AppState {
+    int page, rail_focus, row, column, search, detail, detail_index;
+    int keyboard, search_cursor, result_focus; char query[24]; int settings[4];
+} AppState;
 static const char *PAGE_NAMES[PAGE_COUNT]={"BOARD","DISCOVER","LIBRARY","ADDONS","SETTINGS"};
 static const char *ICON_NAMES[PAGE_COUNT]={"nav_board","nav_discover","nav_library","nav_addons","nav_settings"};
-static Image logo, wordmark, search_icon, cross_icon, circle_icon, triangle_icon;
+static Image logo, wordmark, search_icon, cross_icon, circle_icon, triangle_icon, square_icon;
 static Image dpad_icon, l1_icon, r1_icon, play_icon, nav_line[PAGE_COUNT], nav_solid[PAGE_COUNT];
 typedef struct CatalogCard {
     char id[24], name[40], type[12], year[16], description[640], poster_url[384];
     Image poster;
 } CatalogCard;
-static CatalogCard live_cards[10];
+static CatalogCard live_cards[15];
 static int catalog_count;
+static int search_count, search_status;
 static int catalog_status;
 static int poster_count;
 static int net_pool, ssl_context, http_context;
@@ -112,6 +116,19 @@ static void load_live_catalog(void){
     catalog_status=2;
 }
 
+static void run_search(const char *query){
+    search_status=1;search_count=0;for(int i=10;i<15;++i){if(live_cards[i].poster.pixels)stbi_image_free(live_cards[i].poster.pixels);memset(&live_cards[i],0,sizeof(live_cards[i]));}
+    char url[320]="https://v3-cinemeta.strem.io/catalog/movie/top/search=";size_t used=strlen(url);
+    for(const char *p=query;*p&&used+4<sizeof(url);++p){if(*p==' '){strcpy(url+used,"%20");used+=3;}else url[used++]=*p;}strcpy(url+used,".json");
+    size_t size=0;unsigned char *json=http_get(url,1024*1024,&size);if(!json){search_status=3;return;}
+    search_count=parse_catalog((char*)json,10,5);free(json);if(!search_count){search_status=3;return;}
+    for(int i=0;i<search_count;++i){CatalogCard *card=&live_cards[10+i];size_t image_size=0;
+        if(strlen(card->poster_url)+4<sizeof(card->poster_url))strcat(card->poster_url,".jpg");
+        unsigned char *encoded=http_get(card->poster_url,3*1024*1024,&image_size);if(encoded){int channels=0;
+            card->poster.pixels=stbi_load_from_memory(encoded,(int)image_size,&card->poster.width,&card->poster.height,&channels,4);free(encoded);}}
+    search_status=2;
+}
+
 static void park_error(const char *message,int code){
     sceKernelDebugOutText(0,"[stremio-ps4] %s: 0x%08x\n",message,(unsigned)code);
     for(;;) sceKernelUsleep(100000);
@@ -154,7 +171,7 @@ static Image load_image(const char *name){
 }
 static void load_assets(void){
     logo=load_image("logo.png");wordmark=load_image("name.png");search_icon=load_image("search.png");
-    cross_icon=load_image("cross.png");circle_icon=load_image("circle.png");triangle_icon=load_image("triangle.png");
+    cross_icon=load_image("cross.png");circle_icon=load_image("circle.png");triangle_icon=load_image("triangle.png");square_icon=load_image("square.png");
     dpad_icon=load_image("dpad.png");l1_icon=load_image("l1.png");r1_icon=load_image("r1.png");play_icon=load_image("play.png");char name[64];
     for(int i=0;i<PAGE_COUNT;++i){strcpy(name,ICON_NAMES[i]);strcat(name,".png");nav_line[i]=load_image(name);
         strcpy(name,ICON_NAMES[i]);strcat(name,"_o.png");nav_solid[i]=load_image(name);}
@@ -176,7 +193,7 @@ static void draw_focus(void *b,int x,int y,int w,int h){
 static void draw_card(void *b,int x,int y,int w,int h,int seed,int focused,const char *title){
     static const uint32_t colors[]={0xff7c304fu,0xff735239u,0xff3b626eu,0xff71415eu,0xff4c3978u};
     draw_rect(b,x,y,w,h,colors[seed%5]);
-    if(catalog_status==2&&seed<catalog_count&&live_cards[seed].poster.pixels)draw_image(b,&live_cards[seed].poster,x,y,w,h-70);
+    if(seed<15&&live_cards[seed].poster.pixels)draw_image(b,&live_cards[seed].poster,x,y,w,h-70);
     draw_rect(b,x,y+h-70,w,70,0xff1a151cu);char shown[21]={0};strncpy(shown,title,sizeof(shown)-1);
     int scale=strlen(shown)>12?2:3;draw_text(b,x+14,y+h-46,shown,scale,INK);if(focused)draw_focus(b,x,y,w,h);
 }
@@ -189,7 +206,7 @@ static void draw_rail(void *b,const AppState *s){
 }
 static void draw_topbar(void *b,const AppState *s){
     int x=190,y=34,w=620,h=60;draw_rect(b,x,y,w,h,s->search?SURFACE_HI:SURFACE);
-    draw_image(b,&search_icon,x+22,y+16,28,28);draw_text(b,x+72,y+20,s->search?"SEARCH MODE":"SEARCH MOVIES AND SERIES",3,s->search?INK:INK_3);
+    draw_image(b,&search_icon,x+22,y+16,28,28);draw_text(b,x+72,y+20,s->search?(s->query[0]?s->query:"SEARCH MODE"):"SEARCH MOVIES AND SERIES",3,s->search?INK:INK_3);
     draw_image(b,&triangle_icon,x+w-48,y+14,32,32);if(s->search)draw_focus(b,x,y,w,h);
     if(wordmark.pixels)draw_image(b,&wordmark,1640,42,220,42);else draw_text(b,1600,54,"STREMIO PS FOUR",3,INK_2);
 }
@@ -238,7 +255,7 @@ static void draw_wrapped(void *b,int x,int y,const char *text,int columns,int li
         p+=n;while(*p==' ')++p;}
 }
 static void draw_detail(void *b,const AppState *s){
-    int index=s->detail_index;if(index<0||index>=catalog_count)return;CatalogCard *card=&live_cards[index];
+    int index=s->detail_index;if(index<0||index>=15||!live_cards[index].name[0])return;CatalogCard *card=&live_cards[index];
     draw_text(b,190,140,"TITLE DETAILS",5,ACCENT_SOFT);
     draw_rect(b,190,220,360,540,SURFACE);if(card->poster.pixels)draw_image(b,&card->poster,190,220,360,540);
     char title[41]={0};strncpy(title,card->name,sizeof(title)-1);draw_text(b,610,230,title,strlen(title)>22?3:5,INK);
@@ -251,6 +268,21 @@ static void draw_detail(void *b,const AppState *s){
 static int draw_prompt(void *b,const Image *icon,const char *label,int x,int y){
     draw_image(b,icon,x,y,38,38);draw_text(b,x+50,y+10,label,3,INK_2);return x+50+(int)strlen(label)*18+28;
 }
+static void draw_search(void *b,const AppState *s){
+    draw_text(b,190,120,"SEARCH",6,INK);
+    const char *status=search_status==1?"LOADING":search_status==2?"LIVE RESULTS":search_status==3?"NO RESULTS":"TYPE A TITLE";
+    draw_text(b,1210,142,status,3,search_status==2?ACCENT_SOFT:INK_3);
+    if(search_count){for(int i=0;i<search_count;++i)draw_card(b,190+i*290,190,250,300,10+i,s->result_focus&&s->search_cursor==i,live_cards[10+i].name);}
+    else {draw_rect(b,190,190,1450,300,SURFACE);draw_text(b,250,310,"ENTER A MOVIE NAME THEN CHOOSE GO",4,INK_2);}
+    static const char *special[]={"SPACE","DELETE","GO"};
+    for(int i=0;i<29;++i){int col=i%10,row=i/10,x=190+col*145,y=550+row*100,w=125;
+        int focused=!s->result_focus&&s->keyboard==i;draw_rect(b,x,y,w,72,focused?ACCENT:SURFACE_HI);
+        char letter[2]={(char)('A'+i),0};const char *label=i<26?letter:special[i-26];int scale=i<26?4:2;
+        draw_text(b,x+(i<26?48:14),y+24,label,scale,INK);if(focused)draw_focus(b,x,y,w,72);}
+    draw_image(b,&cross_icon,190,890,38,38);draw_text(b,240,900,"TYPE OR OPEN",3,INK_2);
+    draw_image(b,&square_icon,520,890,38,38);draw_text(b,570,900,"DELETE",3,INK_2);
+    draw_image(b,&circle_icon,800,890,38,38);draw_text(b,850,900,"CLOSE",3,INK_2);
+}
 static void draw_footer(void *b,const AppState *s){
     draw_rect(b,140,1008,1780,72,0xff171117u);int x=190;
     x=draw_prompt(b,&dpad_icon,"NAVIGATE",x,1025);x=draw_prompt(b,&cross_icon,s->rail_focus?"OPEN":"SELECT",x,1025);
@@ -260,8 +292,7 @@ static void draw_footer(void *b,const AppState *s){
 static void draw_screen(void *b,const AppState *s){
     fill_buffer(b,GROUND);draw_rail(b,s);draw_topbar(b,s);
     if(s->detail)draw_detail(b,s);
-    else if(s->search){draw_text(b,190,190,"SEARCH",7,INK);draw_text(b,190,290,"ON SCREEN KEYBOARD COMING WITH NETWORK SEARCH",4,INK_2);
-        draw_rect(b,190,390,1450,260,SURFACE);draw_text(b,250,485,"PRESS TRIANGLE OR CIRCLE TO RETURN",4,ACCENT_SOFT);}
+    else if(s->search)draw_search(b,s);
     else switch(s->page){case 0:draw_board(b,s);break;case 1:draw_discover(b,s);break;case 2:draw_library(b,s);break;case 3:draw_addons(b,s);break;default:draw_settings(b,s);}
     draw_footer(b,s);
 }
@@ -273,7 +304,31 @@ static int open_pad(void){
 static void reset_cursor(AppState *s){s->row=0;s->column=0;}
 static int route_input(AppState *s,uint32_t pressed){
     if(s->detail){if(pressed&ORBIS_PAD_BUTTON_CIRCLE)s->detail=0;return pressed!=0;}
-    if(s->search){if(pressed&(ORBIS_PAD_BUTTON_TRIANGLE|ORBIS_PAD_BUTTON_CIRCLE))s->search=0;return pressed!=0;}
+    if(s->search){
+        size_t length=strlen(s->query);
+        if(pressed&ORBIS_PAD_BUTTON_CIRCLE){s->search=0;s->result_focus=0;return 1;}
+        if((pressed&ORBIS_PAD_BUTTON_SQUARE)&&length){s->query[length-1]=0;return 1;}
+        if(s->result_focus){
+            if((pressed&ORBIS_PAD_BUTTON_LEFT)&&s->search_cursor>0)--s->search_cursor;
+            if((pressed&ORBIS_PAD_BUTTON_RIGHT)&&s->search_cursor<search_count-1)++s->search_cursor;
+            if(pressed&ORBIS_PAD_BUTTON_DOWN){s->result_focus=0;s->keyboard=0;}
+            if(pressed&ORBIS_PAD_BUTTON_CROSS){s->detail_index=10+s->search_cursor;s->detail=1;}
+            return pressed!=0;
+        }
+        int col=s->keyboard%10,row=s->keyboard/10;
+        if((pressed&ORBIS_PAD_BUTTON_LEFT)&&col>0)--s->keyboard;
+        if((pressed&ORBIS_PAD_BUTTON_RIGHT)&&col<9&&s->keyboard<28)++s->keyboard;
+        if(pressed&ORBIS_PAD_BUTTON_UP){if(row>0)s->keyboard-=10;else if(search_count){s->result_focus=1;s->search_cursor=0;}}
+        if((pressed&ORBIS_PAD_BUTTON_DOWN)&&row<2&&s->keyboard+10<29)s->keyboard+=10;
+        if(pressed&ORBIS_PAD_BUTTON_TRIANGLE){if(length)run_search(s->query);return 1;}
+        if(pressed&ORBIS_PAD_BUTTON_CROSS){
+            if(s->keyboard<26&&length+1<sizeof(s->query)){s->query[length]=(char)('A'+s->keyboard);s->query[length+1]=0;}
+            else if(s->keyboard==26&&length+1<sizeof(s->query)&&length){s->query[length]=' ';s->query[length+1]=0;}
+            else if(s->keyboard==27&&length)s->query[length-1]=0;
+            else if(s->keyboard==28&&length){run_search(s->query);s->search_cursor=0;if(search_count)s->result_focus=1;}
+        }
+        return pressed!=0;
+    }
     if(pressed&ORBIS_PAD_BUTTON_TRIANGLE){s->search=1;return 1;}
     if(pressed&ORBIS_PAD_BUTTON_L1){s->page=(s->page+PAGE_COUNT-1)%PAGE_COUNT;s->rail_focus=0;reset_cursor(s);return 1;}
     if(pressed&ORBIS_PAD_BUTTON_R1){s->page=(s->page+1)%PAGE_COUNT;s->rail_focus=0;reset_cursor(s);return 1;}

@@ -69,6 +69,9 @@ opens a native title-details screen with Cross and returns with Circle.
 Version 0.15 imports the PS5 port's original wordmark and DualShock prompt
 artwork. Search, global navigation, page switching, selection, back, and the
 details action now use packaged Triangle/D-pad/L1/R1/Cross/Circle/Play assets.
+Version 0.16 replaces the search placeholder with a controller-driven keyboard,
+editable queries, delete/space/go actions, live Cinemeta movie search, five
+poster results, result navigation, and result-to-details routing.
 
 The output is `dist-ps4/IV0000-BREW00991_00-STREMIOPS4000000.pkg`.
 It is a bring-up build, not the Stremio application: on compatible jailbroken
