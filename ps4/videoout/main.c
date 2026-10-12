@@ -13,6 +13,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #define STBI_ONLY_PNG
 #define STBI_ONLY_JPEG
@@ -29,11 +30,11 @@ static const uint32_t INK=0xfff7f7f7u, INK_2=0xffc8c8c8u, INK_3=0xff8f8f8fu;
 typedef struct Image { unsigned char *pixels; int width, height; } Image;
 typedef struct AppState {
     int page, rail_focus, row, column, search, detail, streams, detail_index;
-    int keyboard, search_cursor, result_focus; char query[24]; int settings[4];
+    int keyboard, search_cursor, result_focus, discover_series; char query[24]; int settings[4];
 } AppState;
 static const char *PAGE_NAMES[PAGE_COUNT]={"BOARD","DISCOVER","LIBRARY","ADDONS","SETTINGS"};
 static const char *ICON_NAMES[PAGE_COUNT]={"nav_board","nav_discover","nav_library","nav_addons","nav_settings"};
-static Image logo, wordmark, search_icon, cross_icon, circle_icon, triangle_icon, square_icon;
+static Image logo, wordmark, search_icon, cross_icon, circle_icon, triangle_icon, square_icon, options_icon;
 static Image dpad_icon, l1_icon, r1_icon, play_icon, nav_line[PAGE_COUNT], nav_solid[PAGE_COUNT];
 typedef struct CatalogCard {
     char id[24], name[40], type[12], year[16], runtime[24], rating[12], genres[96];
@@ -42,9 +43,23 @@ typedef struct CatalogCard {
 static CatalogCard live_cards[15];
 static int catalog_count;
 static int search_count, search_status;
+static char saved_ids[15][24];static int saved_id_count;
 static int catalog_status;
 static int poster_count;
 static int net_pool, ssl_context, http_context;
+
+static int id_saved(const char *id){for(int i=0;i<saved_id_count;++i)if(!strcmp(saved_ids[i],id))return 1;return 0;}
+static void apply_saved(void){for(int i=0;i<15;++i)if(live_cards[i].id[0])live_cards[i].saved=id_saved(live_cards[i].id);}
+static void load_state(AppState *s){
+    FILE *f=fopen("/data/stremio-ps4.cfg","r");if(!f)return;char line[128];
+    if(fgets(line,sizeof(line),f))sscanf(line,"%d %d %d %d",&s->settings[0],&s->settings[1],&s->settings[2],&s->settings[3]);
+    while(saved_id_count<15&&fgets(line,sizeof(line),f)){line[strcspn(line,"\r\n")]=0;if(line[0])strncpy(saved_ids[saved_id_count++],line,23);}fclose(f);
+}
+static void save_state(const AppState *s){
+    saved_id_count=0;for(int i=0;i<15&&saved_id_count<15;++i)if(live_cards[i].saved&&live_cards[i].id[0])strncpy(saved_ids[saved_id_count++],live_cards[i].id,23);
+    FILE *f=fopen("/data/stremio-ps4.cfg","w");if(!f)return;fprintf(f,"%d %d %d %d\n",s->settings[0],s->settings[1],s->settings[2],s->settings[3]);
+    for(int i=0;i<saved_id_count;++i)fprintf(f,"%s\n",saved_ids[i]);fclose(f);
+}
 
 static int network_init(void){
     if(sceSysmoduleLoadModuleInternal(ORBIS_SYSMODULE_INTERNAL_NET)<0)return 0;
@@ -113,7 +128,12 @@ static void load_live_catalog(void){
         unsigned char *encoded=http_get(live_cards[i].poster_url,3*1024*1024,&image_size);
         if(encoded){int channels=0;live_cards[i].poster.pixels=stbi_load_from_memory(encoded,(int)image_size,&live_cards[i].poster.width,&live_cards[i].poster.height,&channels,4);
             if(live_cards[i].poster.pixels)++poster_count;free(encoded);}}
-    catalog_status=2;
+    apply_saved();catalog_status=2;
+}
+
+static void refresh_catalogs(void){
+    for(int i=0;i<10;++i){if(live_cards[i].poster.pixels)stbi_image_free(live_cards[i].poster.pixels);memset(&live_cards[i],0,sizeof(live_cards[i]));}
+    catalog_count=poster_count=0;load_live_catalog();
 }
 
 static void run_search(const char *query){
@@ -126,7 +146,7 @@ static void run_search(const char *query){
         if(strlen(card->poster_url)+4<sizeof(card->poster_url))strcat(card->poster_url,".jpg");
         unsigned char *encoded=http_get(card->poster_url,3*1024*1024,&image_size);if(encoded){int channels=0;
             card->poster.pixels=stbi_load_from_memory(encoded,(int)image_size,&card->poster.width,&card->poster.height,&channels,4);free(encoded);}}
-    search_status=2;
+    apply_saved();search_status=2;
 }
 
 static void parse_genres(const char *json,char *out,size_t capacity){
@@ -188,7 +208,7 @@ static Image load_image(const char *name){
 }
 static void load_assets(void){
     logo=load_image("logo.png");wordmark=load_image("name.png");search_icon=load_image("search.png");
-    cross_icon=load_image("cross.png");circle_icon=load_image("circle.png");triangle_icon=load_image("triangle.png");square_icon=load_image("square.png");
+    cross_icon=load_image("cross.png");circle_icon=load_image("circle.png");triangle_icon=load_image("triangle.png");square_icon=load_image("square.png");options_icon=load_image("options.png");
     dpad_icon=load_image("dpad.png");l1_icon=load_image("l1.png");r1_icon=load_image("r1.png");play_icon=load_image("play.png");char name[64];
     for(int i=0;i<PAGE_COUNT;++i){strcpy(name,ICON_NAMES[i]);strcat(name,".png");nav_line[i]=load_image(name);
         strcpy(name,ICON_NAMES[i]);strcat(name,"_o.png");nav_solid[i]=load_image(name);}
@@ -237,13 +257,16 @@ static void draw_board(void *b,const AppState *s){
     draw_text(b,190,568,"POPULAR SERIES",5,INK);
     for(int i=0;i<5;++i){int index=5+i;const char *label=index<catalog_count?live_cards[index].name:"SERIES";
         draw_card(b,190+i*290,628,250,300,index,!s->rail_focus&&s->row==1&&s->column==i,label);}
+    draw_image(b,&options_icon,1510,950,38,38);draw_text(b,1562,960,"REFRESH",3,INK_3);
 }
 static void draw_discover(void *b,const AppState *s){
     draw_text(b,190,154,"DISCOVER",7,INK);const char *filters[]={"MOVIES","POPULAR","ALL GENRES"};
+    filters[0]=s->discover_series?"SERIES":"MOVIES";
     for(int i=0;i<3;++i){draw_rect(b,190+i*330,238,300,66,i==0?ACCENT:SURFACE);draw_text(b,214+i*330,258,filters[i],3,INK);}
     const char *titles[]={"ACTION","DRAMA","COMEDY","THRILLER","FAMILY"};
-    for(int i=0;i<5;++i)draw_card(b,190+i*290,370,250,360,i,!s->rail_focus&&s->column==i,catalog_status==2?live_cards[i].name:titles[i]);
-    draw_text(b,190,800,"CHANGE FILTERS WITH CROSS",3,INK_3);
+    int first=s->discover_series?5:0;
+    for(int i=0;i<5;++i){int index=first+i;draw_card(b,190+i*290,370,250,360,index,!s->rail_focus&&s->column==i,catalog_status==2&&index<catalog_count?live_cards[index].name:titles[i]);}
+    draw_image(b,&square_icon,190,800,38,38);draw_text(b,244,810,"SWITCH MOVIES SERIES",3,INK_3);
 }
 static void draw_library(void *b,const AppState *s){
     draw_text(b,190,154,"LIBRARY",7,INK);draw_text(b,190,232,"YOUR SAVED MOVIES AND SERIES",3,INK_2);int count=0;
@@ -338,7 +361,7 @@ static int route_input(AppState *s,uint32_t pressed){
     if(s->detail){
         if(pressed&ORBIS_PAD_BUTTON_CIRCLE)s->detail=0;
         if(pressed&ORBIS_PAD_BUTTON_CROSS)s->streams=1;
-        if(pressed&ORBIS_PAD_BUTTON_SQUARE)live_cards[s->detail_index].saved^=1;
+        if(pressed&ORBIS_PAD_BUTTON_SQUARE){live_cards[s->detail_index].saved^=1;save_state(s);}
         return pressed!=0;
     }
     if(s->search){
@@ -367,6 +390,8 @@ static int route_input(AppState *s,uint32_t pressed){
         return pressed!=0;
     }
     if(pressed&ORBIS_PAD_BUTTON_TRIANGLE){s->search=1;return 1;}
+    if((pressed&ORBIS_PAD_BUTTON_OPTIONS)&&s->page==0){refresh_catalogs();return 1;}
+    if((pressed&ORBIS_PAD_BUTTON_SQUARE)&&s->page==1){s->discover_series^=1;s->column=0;return 1;}
     if(pressed&ORBIS_PAD_BUTTON_L1){s->page=(s->page+PAGE_COUNT-1)%PAGE_COUNT;s->rail_focus=0;reset_cursor(s);return 1;}
     if(pressed&ORBIS_PAD_BUTTON_R1){s->page=(s->page+1)%PAGE_COUNT;s->rail_focus=0;reset_cursor(s);return 1;}
     if(s->rail_focus){if((pressed&ORBIS_PAD_BUTTON_UP)&&s->row>0)--s->row;if((pressed&ORBIS_PAD_BUTTON_DOWN)&&s->row<PAGE_COUNT-1)++s->row;
@@ -375,9 +400,9 @@ static int route_input(AppState *s,uint32_t pressed){
     if((pressed&ORBIS_PAD_BUTTON_RIGHT)&&s->page<3&&s->column<4)++s->column;
     if(pressed&ORBIS_PAD_BUTTON_UP){if((s->page==0||s->page>=3)&&s->row>0)--s->row;}
     if(pressed&ORBIS_PAD_BUTTON_DOWN){if(s->page==0&&s->row<1){++s->row;if(s->column>3)s->column=3;}else if(s->page>=3&&s->row<3)++s->row;}
-    if((pressed&ORBIS_PAD_BUTTON_CROSS)&&s->page==4)s->settings[s->row]^=1;
+    if((pressed&ORBIS_PAD_BUTTON_CROSS)&&s->page==4){s->settings[s->row]^=1;save_state(s);}
     else if((pressed&ORBIS_PAD_BUTTON_CROSS)&&catalog_status==2&&s->page<3){
-        int index=s->page==0?s->row*5+s->column:s->page==2?saved_index(s->column):s->column;
+        int index=s->page==0?s->row*5+s->column:s->page==2?saved_index(s->column):s->column+(s->page==1&&s->discover_series?5:0);
         if(index>=0&&index<15&&live_cards[index].name[0]){s->detail_index=index;load_metadata(&live_cards[index]);s->detail=1;}
     }
     if(pressed&ORBIS_PAD_BUTTON_CIRCLE){if(s->page!=0){s->page=0;reset_cursor(s);}else return -1;}return pressed!=0;
@@ -392,7 +417,7 @@ int main(void){
     void *buffers[BUFFER_COUNT]={video_memory,(uint8_t*)video_memory+frame_size};OrbisVideoOutBufferAttribute attribute;
     sceVideoOutSetBufferAttribute(&attribute,0x80000000,1,0,WIDTH,HEIGHT,WIDTH);
     result=sceVideoOutRegisterBuffers(video,0,buffers,BUFFER_COUNT,&attribute);if(result<0)park_error("sceVideoOutRegisterBuffers",result);
-    load_assets();AppState state={0};for(int i=0;i<4;++i)state.settings[i]=1;catalog_status=1;
+    load_assets();AppState state={0};for(int i=0;i<4;++i)state.settings[i]=1;load_state(&state);catalog_status=1;
     draw_screen(buffers[0],&state);draw_screen(buffers[1],&state);sceVideoOutSetFlipRate(video,0);
     result=sceVideoOutSubmitFlip(video,0,ORBIS_VIDEO_OUT_FLIP_VSYNC,1);if(result<0)park_error("sceVideoOutSubmitFlip",result);
     sceSystemServiceHideSplashScreen();

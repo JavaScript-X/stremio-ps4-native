@@ -12,7 +12,7 @@ VERSION     := 0.03
 TITLE_ID    := BREW00991
 CONTENT_ID  := IV0000-BREW00991_00-STREMIOPS4000000
 UI_ASSETS   := logo.png search.png \
-	name.png cross.png circle.png triangle.png square.png dpad.png l1.png r1.png play.png \
+	name.png cross.png circle.png triangle.png square.png options.png dpad.png l1.png r1.png play.png \
 	nav_board.png nav_board_o.png nav_discover.png nav_discover_o.png \
 	nav_library.png nav_library_o.png nav_addons.png nav_addons_o.png \
 	nav_settings.png nav_settings_o.png
@@ -45,7 +45,7 @@ endif
 
 ifeq ($(BUILD_MODE),videoout)
 TITLE       := Stremio PS4
-VERSION     := 0.17
+VERSION     := 0.18
 SOURCE      := videoout/main.c
 OBJECT      := $(OBJDIR)/videoout.o
 LIBS        := -lc -lm -lkernel -lSceVideoOut -lSceSystemService -lScePad -lSceUserService \

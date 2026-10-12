@@ -76,6 +76,9 @@ Version 0.17 ports the PS5 metadata-on-open flow for full descriptions, runtime,
 rating and genres. Square now saves/removes titles in a working local-session
 Library, and Find Streams opens a routed source screen that links to Addons when
 no stream provider has been configured.
+Version 0.18 persists settings and saved IMDb ids in PS4 app storage, restores
+matching Library entries on launch, makes Discover switch live Movies/Series
+with Square, and adds Options-driven catalog refresh with the PS5 Options asset.
 
 The output is `dist-ps4/IV0000-BREW00991_00-STREMIOPS4000000.pkg`.
 It is a bring-up build, not the Stremio application: on compatible jailbroken
