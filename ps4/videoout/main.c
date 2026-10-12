@@ -76,8 +76,9 @@ static const char *json_value(const char *from,const char *key,char *out,size_t 
 }
 
 static int parse_catalog(char *json){
-    const char *p=json;int count=0;while(count<5&&(p=strstr(p,"\"name\":\""))){
-        const char *after=json_value(p,"\"name\":\"",live_cards[count].name,sizeof(live_cards[count].name),1);if(!after)break;
+    const char *p=json;int count=0;while(count<5&&(p=strstr(p,"\"imdb_id\":\""))){
+        const char *name=strstr(p,"\"name\":\"");if(!name)break;
+        const char *after=json_value(name,"\"name\":\"",live_cards[count].name,sizeof(live_cards[count].name),1);if(!after)break;
         const char *poster=strstr(after,"\"poster\":\"");if(!poster){p=after;continue;}
         p=json_value(poster,"\"poster\":\"",live_cards[count].poster_url,sizeof(live_cards[count].poster_url),0);if(!p)break;++count;
     }return count;
@@ -158,8 +159,8 @@ static void draw_card(void *b,int x,int y,int w,int h,int seed,int focused,const
     static const uint32_t colors[]={0xff7c304fu,0xff735239u,0xff3b626eu,0xff71415eu,0xff4c3978u};
     draw_rect(b,x,y,w,h,colors[seed%5]);
     if(catalog_status==2&&live_cards[seed%5].poster.pixels)draw_image(b,&live_cards[seed%5].poster,x,y,w,h-70);
-    draw_rect(b,x,y+h-70,w,70,0xff1a151cu);char shown[14]={0};strncpy(shown,title,sizeof(shown)-1);
-    draw_text(b,x+14,y+h-48,shown,3,INK);if(focused)draw_focus(b,x,y,w,h);
+    draw_rect(b,x,y+h-70,w,70,0xff1a151cu);char shown[21]={0};strncpy(shown,title,sizeof(shown)-1);
+    int scale=strlen(shown)>12?2:3;draw_text(b,x+14,y+h-46,shown,scale,INK);if(focused)draw_focus(b,x,y,w,h);
 }
 static void draw_rail(void *b,const AppState *s){
     draw_rect(b,0,0,140,HEIGHT,0xff171117u);if(logo.pixels)draw_image(b,&logo,42,30,58,58);else draw_text(b,36,42,"S",7,ACCENT_SOFT);

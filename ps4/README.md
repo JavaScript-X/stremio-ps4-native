@@ -60,6 +60,9 @@ in the Board status line for hardware diagnosis.
 Version 0.12 requests Metahub's direct JPEG representation for every poster,
 avoiding both redirects and unsupported WebP responses. It also clips long
 card labels and shows live catalog titles consistently in Discover.
+Version 0.13 anchors each parsed card to its Cinemeta metadata object so nested
+rating, genre and link names cannot replace movie titles. Long titles now use
+a smaller card-label scale rather than overflowing or disappearing.
 
 The output is `dist-ps4/IV0000-BREW00991_00-STREMIOPS4000000.pkg`.
 It is a bring-up build, not the Stremio application: on compatible jailbroken
