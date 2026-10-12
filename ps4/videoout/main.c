@@ -30,7 +30,7 @@ static const uint32_t INK=0xfff7f7f7u, INK_2=0xffc8c8c8u, INK_3=0xff8f8f8fu;
 typedef struct Image { unsigned char *pixels; int width, height; } Image;
 typedef struct AppState {
     int page, rail_focus, row, column, search, detail, streams, detail_index;
-    int keyboard, search_cursor, result_focus, discover_series; char query[24]; int settings[4];
+    int keyboard, search_cursor, result_focus, discover_series, account; char query[24]; int settings[4];
 } AppState;
 static const char *PAGE_NAMES[PAGE_COUNT]={"BOARD","DISCOVER","LIBRARY","ADDONS","SETTINGS"};
 static const char *ICON_NAMES[PAGE_COUNT]={"nav_board","nav_discover","nav_library","nav_addons","nav_settings"};
@@ -47,6 +47,8 @@ static char saved_ids[15][24];static int saved_id_count;
 static int catalog_status;
 static int poster_count;
 static int net_pool, ssl_context, http_context;
+static char auth_key[256], link_code[16], link_url[128];
+static int account_status, public_domain_enabled=1, public_domain_online;
 
 static int id_saved(const char *id){for(int i=0;i<saved_id_count;++i)if(!strcmp(saved_ids[i],id))return 1;return 0;}
 static void apply_saved(void){for(int i=0;i<15;++i)if(live_cards[i].id[0])live_cards[i].saved=id_saved(live_cards[i].id);}
@@ -60,8 +62,19 @@ static void save_state(const AppState *s){
     FILE *f=fopen("/data/stremio-ps4.cfg","w");if(!f)return;fprintf(f,"%d %d %d %d\n",s->settings[0],s->settings[1],s->settings[2],s->settings[3]);
     for(int i=0;i<saved_id_count;++i)fprintf(f,"%s\n",saved_ids[i]);fclose(f);
 }
+static void load_account(void){
+    FILE *f=fopen("/data/stremio-ps4-auth.cfg","r");if(!f)return;char line[320];
+    if(fgets(line,sizeof(line),f)){line[strcspn(line,"\r\n")]=0;if(!strncmp(line,"auth=",5))strncpy(auth_key,line+5,sizeof(auth_key)-1);}
+    if(fgets(line,sizeof(line),f)&&!strncmp(line,"public_domain=",14))public_domain_enabled=atoi(line+14)!=0;fclose(f);
+    if(auth_key[0])account_status=4;
+}
+static void save_account(void){
+    FILE *f=fopen("/data/stremio-ps4-auth.cfg","w");if(!f)return;
+    fprintf(f,"auth=%s\npublic_domain=%d\n",auth_key,public_domain_enabled);fclose(f);
+}
 
 static int network_init(void){
+    if(http_context>0)return 1;
     if(sceSysmoduleLoadModuleInternal(ORBIS_SYSMODULE_INTERNAL_NET)<0)return 0;
     if(sceSysmoduleLoadModuleInternal(ORBIS_SYSMODULE_INTERNAL_HTTP)<0)return 0;
     if(sceSysmoduleLoadModuleInternal(ORBIS_SYSMODULE_INTERNAL_SSL)<0)return 0;
@@ -97,6 +110,27 @@ static const char *json_value(const char *from,const char *key,char *out,size_t 
     const char *p=strstr(from,key);if(!p)return 0;p+=strlen(key);size_t n=0;
     while(*p&&*p!='\"'){if(*p=='\\'&&p[1])++p;if(n+1<out_size){char c=*p;out[n++]=uppercase&&c>='a'&&c<='z'?c-32:c;}++p;}
     out[n]=0;return *p?p+1:0;
+}
+
+static void create_device_link(void){
+    account_status=1;link_code[0]=link_url[0]=0;if(!network_init()){account_status=5;return;}size_t size=0;
+    unsigned char *json=http_get("https://link.stremio.com/api/v2/create?type=Create",128*1024,&size);
+    if(!json){account_status=5;return;}const char *p=(char*)json,*v;
+    if((v=strstr(p,"\"code\":\"")))json_value(v,"\"code\":\"",link_code,sizeof(link_code),1);
+    if((v=strstr(p,"\"link\":\"")))json_value(v,"\"link\":\"",link_url,sizeof(link_url),0);
+    free(json);account_status=link_code[0]?2:5;
+}
+static void poll_device_link(void){
+    if(!link_code[0]){create_device_link();return;}account_status=3;char url[256];
+    snprintf(url,sizeof(url),"https://link.stremio.com/api/v2/read?type=Read&code=%s",link_code);size_t size=0;
+    unsigned char *json=http_get(url,256*1024,&size);if(!json){account_status=2;return;}const char *v=strstr((char*)json,"\"authKey\":\"");
+    if(v){json_value(v,"\"authKey\":\"",auth_key,sizeof(auth_key),0);if(auth_key[0]){account_status=4;save_account();}}
+    else account_status=2;free(json);
+}
+static void validate_public_domain(void){
+    public_domain_online=0;if(!public_domain_enabled||!network_init())return;size_t size=0;
+    unsigned char *json=http_get("https://caching.stremio.net/publicdomainmovies.now.sh/manifest.json",256*1024,&size);
+    if(json){public_domain_online=strstr((char*)json,"org.stremio.pubdomainmovies")!=0;free(json);}
 }
 
 static int parse_catalog(char *json,int first,int maximum){
@@ -278,15 +312,27 @@ static void draw_addons(void *b,const AppState *s){
     draw_text(b,190,154,"ADDONS",7,INK);draw_text(b,190,232,"MANAGE YOUR STREMIO SOURCES",3,INK_2);
     const char *names[]={"CINEMETA","PUBLIC DOMAIN","LOCAL FILES","COMMUNITY"};
     for(int i=0;i<4;++i){int y=320+i*145;draw_rect(b,190,y,1340,110,!s->rail_focus&&s->row==i?SURFACE_HI:SURFACE);
-        draw_rect(b,214,y+20,70,70,i==0?ACCENT:0xff584667u);draw_text(b,320,y+26,names[i],5,INK);
-        draw_text(b,320,y+76,i<2?"INSTALLED":"AVAILABLE",3,i<2?ACCENT_SOFT:INK_3);if(!s->rail_focus&&s->row==i)draw_focus(b,190,y,1340,110);}
+        int enabled=i==0||(i==1&&public_domain_enabled);draw_rect(b,214,y+20,70,70,enabled?ACCENT:0xff584667u);draw_text(b,320,y+26,names[i],5,INK);
+        const char *status=i==0?"INSTALLED":i==1?(public_domain_enabled?(public_domain_online?"ONLINE":"ENABLED - CROSS TO CHECK"):"DISABLED"):"AVAILABLE";
+        draw_text(b,320,y+76,status,3,enabled?ACCENT_SOFT:INK_3);if(!s->rail_focus&&s->row==i)draw_focus(b,190,y,1340,110);}
 }
 static void draw_settings(void *b,const AppState *s){
     draw_text(b,190,154,"SETTINGS",7,INK);draw_text(b,190,232,"PLAYBACK AND APPLICATION",3,INK_2);
     const char *names[]={"BUILTIN TORRENTS","AUTO SUBTITLES","AUTOPLAY NEXT","UI SOUNDS"};
-    for(int i=0;i<4;++i){int y=320+i*130;draw_rect(b,190,y,1200,96,!s->rail_focus&&s->row==i?SURFACE_HI:SURFACE);
+    for(int i=0;i<4;++i){int y=300+i*115;draw_rect(b,190,y,1200,86,!s->rail_focus&&s->row==i?SURFACE_HI:SURFACE);
         draw_text(b,230,y+32,names[i],4,INK);draw_rect(b,1190,y+20,160,56,s->settings[i]?ACCENT:0xff514951u);
-        draw_text(b,1230,y+38,s->settings[i]?"ON":"OFF",3,INK);if(!s->rail_focus&&s->row==i)draw_focus(b,190,y,1200,96);}
+        draw_text(b,1230,y+38,s->settings[i]?"ON":"OFF",3,INK);if(!s->rail_focus&&s->row==i)draw_focus(b,190,y,1200,86);}
+    int y=760;draw_rect(b,190,y,1200,96,!s->rail_focus&&s->row==4?SURFACE_HI:SURFACE);draw_text(b,230,y+32,"STREMIO ACCOUNT",4,INK);
+    draw_text(b,1010,y+34,auth_key[0]?"LINKED":"LINK DEVICE",3,auth_key[0]?ACCENT_SOFT:INK_2);if(!s->rail_focus&&s->row==4)draw_focus(b,190,y,1200,96);
+}
+static void draw_account(void *b,const AppState *s){
+    (void)s;draw_text(b,190,140,"STREMIO ACCOUNT",6,INK);draw_text(b,190,220,"LINK THIS PS FOUR TO YOUR STREMIO ACCOUNT",3,INK_2);
+    draw_rect(b,190,300,1420,360,SURFACE);
+    if(account_status==4){draw_text(b,250,370,"ACCOUNT LINKED",6,ACCENT_SOFT);draw_text(b,250,470,"YOUR ACCOUNT TOKEN IS SAVED ON THIS CONSOLE",3,INK_2);}
+    else {draw_text(b,250,350,account_status==1?"CREATING CODE":account_status==3?"CHECKING APPROVAL":account_status==5?"LINK SERVICE UNAVAILABLE":"ENTER THIS CODE",4,INK_2);
+        if(link_code[0]){draw_text(b,250,430,link_code,10,ACCENT_SOFT);draw_text(b,250,560,"OPEN LINK STREMIO COM ON YOUR PHONE",3,INK);}}
+    draw_image(b,&cross_icon,250,730,38,38);draw_text(b,304,740,account_status==4?"ACCOUNT LINKED":"CHECK APPROVAL",3,INK_2);
+    draw_image(b,&square_icon,650,730,38,38);draw_text(b,704,740,account_status==4?"UNLINK":"NEW CODE",3,INK_2);draw_image(b,&circle_icon,950,730,38,38);draw_text(b,1004,740,"BACK",3,INK_2);
 }
 static void draw_wrapped(void *b,int x,int y,const char *text,int columns,int lines){
     char line[64];const char *p=text;
@@ -341,7 +387,8 @@ static void draw_footer(void *b,const AppState *s){
 }
 static void draw_screen(void *b,const AppState *s){
     fill_buffer(b,GROUND);draw_rail(b,s);draw_topbar(b,s);
-    if(s->streams)draw_streams(b,s);
+    if(s->account)draw_account(b,s);
+    else if(s->streams)draw_streams(b,s);
     else if(s->detail)draw_detail(b,s);
     else if(s->search)draw_search(b,s);
     else switch(s->page){case 0:draw_board(b,s);break;case 1:draw_discover(b,s);break;case 2:draw_library(b,s);break;case 3:draw_addons(b,s);break;default:draw_settings(b,s);}
@@ -354,6 +401,11 @@ static int open_pad(void){
 }
 static void reset_cursor(AppState *s){s->row=0;s->column=0;}
 static int route_input(AppState *s,uint32_t pressed){
+    if(s->account){
+        if(pressed&ORBIS_PAD_BUTTON_CIRCLE)s->account=0;
+        if((pressed&ORBIS_PAD_BUTTON_CROSS)&&account_status!=4)poll_device_link();
+        if(pressed&ORBIS_PAD_BUTTON_SQUARE){if(account_status==4){auth_key[0]=link_code[0]=0;account_status=0;save_account();}else create_device_link();}return pressed!=0;
+    }
     if(s->streams){
         if(pressed&ORBIS_PAD_BUTTON_CIRCLE)s->streams=0;
         if(pressed&ORBIS_PAD_BUTTON_CROSS){s->streams=0;s->detail=0;s->page=3;s->rail_focus=0;reset_cursor(s);}return pressed!=0;
@@ -399,8 +451,9 @@ static int route_input(AppState *s,uint32_t pressed){
     if(pressed&ORBIS_PAD_BUTTON_LEFT){if(s->column>0&&s->page<3)--s->column;else{s->rail_focus=1;s->row=s->page;}}
     if((pressed&ORBIS_PAD_BUTTON_RIGHT)&&s->page<3&&s->column<4)++s->column;
     if(pressed&ORBIS_PAD_BUTTON_UP){if((s->page==0||s->page>=3)&&s->row>0)--s->row;}
-    if(pressed&ORBIS_PAD_BUTTON_DOWN){if(s->page==0&&s->row<1){++s->row;if(s->column>3)s->column=3;}else if(s->page>=3&&s->row<3)++s->row;}
-    if((pressed&ORBIS_PAD_BUTTON_CROSS)&&s->page==4){s->settings[s->row]^=1;save_state(s);}
+    if(pressed&ORBIS_PAD_BUTTON_DOWN){if(s->page==0&&s->row<1){++s->row;if(s->column>3)s->column=3;}else if(s->page==3&&s->row<3)++s->row;else if(s->page==4&&s->row<4)++s->row;}
+    if((pressed&ORBIS_PAD_BUTTON_CROSS)&&s->page==4){if(s->row==4){s->account=1;if(!auth_key[0]&&!link_code[0])create_device_link();}else{s->settings[s->row]^=1;save_state(s);}}
+    else if((pressed&ORBIS_PAD_BUTTON_CROSS)&&s->page==3&&s->row==1){public_domain_enabled^=1;save_account();validate_public_domain();}
     else if((pressed&ORBIS_PAD_BUTTON_CROSS)&&catalog_status==2&&s->page<3){
         int index=s->page==0?s->row*5+s->column:s->page==2?saved_index(s->column):s->column+(s->page==1&&s->discover_series?5:0);
         if(index>=0&&index<15&&live_cards[index].name[0]){s->detail_index=index;load_metadata(&live_cards[index]);s->detail=1;}
@@ -417,11 +470,11 @@ int main(void){
     void *buffers[BUFFER_COUNT]={video_memory,(uint8_t*)video_memory+frame_size};OrbisVideoOutBufferAttribute attribute;
     sceVideoOutSetBufferAttribute(&attribute,0x80000000,1,0,WIDTH,HEIGHT,WIDTH);
     result=sceVideoOutRegisterBuffers(video,0,buffers,BUFFER_COUNT,&attribute);if(result<0)park_error("sceVideoOutRegisterBuffers",result);
-    load_assets();AppState state={0};for(int i=0;i<4;++i)state.settings[i]=1;load_state(&state);catalog_status=1;
+    load_assets();AppState state={0};for(int i=0;i<4;++i)state.settings[i]=1;load_state(&state);load_account();catalog_status=1;
     draw_screen(buffers[0],&state);draw_screen(buffers[1],&state);sceVideoOutSetFlipRate(video,0);
     result=sceVideoOutSubmitFlip(video,0,ORBIS_VIDEO_OUT_FLIP_VSYNC,1);if(result<0)park_error("sceVideoOutSubmitFlip",result);
     sceSystemServiceHideSplashScreen();
-    load_live_catalog();draw_screen(buffers[1],&state);sceVideoOutSubmitFlip(video,1,ORBIS_VIDEO_OUT_FLIP_VSYNC,2);
+    load_live_catalog();validate_public_domain();draw_screen(buffers[1],&state);sceVideoOutSubmitFlip(video,1,ORBIS_VIDEO_OUT_FLIP_VSYNC,2);
     const int pad=open_pad();if(pad<0)park_error("scePadOpen",pad);
     int active_buffer=1;int64_t flip_id=3;uint32_t previous_buttons=0;
     for(;;){OrbisPadData input={0};if(scePadReadState(pad,&input)==0){uint32_t pressed=input.buttons&~previous_buttons;previous_buttons=input.buttons;

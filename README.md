@@ -2,9 +2,18 @@
 
 > **Development branch:** this is an independent PS4 port of the upstream
 > GPL-3.0 PS5 client. It does not use code from `JavaScript-X/stremio-ps4` or
-> any other JavaScript-X project. There is no installable PS4 package yet; the
-> honest implementation status and hardware acceptance gates are tracked in
+> any other JavaScript-X project. A hardware-tested PS4 package is now produced;
+> the implementation status and remaining acceptance gates are tracked in
 > [PORTING.md](PORTING.md) and [ps4/README.md](ps4/README.md).
+
+## PS4 port status
+
+Version 0.19 uses the stable native VideoOut renderer and has been tested on
+PS4 firmware 13.02 with GoldHEN 2.4b18.12. It includes live Cinemeta movie and
+series catalogs, poster loading, search, metadata, local library and settings
+persistence, controller navigation, Stremio device-link account authentication,
+and live Public Domain addon validation. Playback, synced account data, episode
+browsing, and general community-addon installation are still in development.
 
 The upstream PS5 documentation is retained below while features are moved to
 the PS4 platform layer. PS5 installation instructions and artifacts do not

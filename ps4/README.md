@@ -79,11 +79,16 @@ no stream provider has been configured.
 Version 0.18 persists settings and saved IMDb ids in PS4 app storage, restores
 matching Library entries on launch, makes Discover switch live Movies/Series
 with Square, and adds Options-driven catalog refresh with the PS5 Options asset.
+Version 0.19 adds Stremio device linking under Settings. It creates a short
+code, checks approval, stores linked state separately from normal preferences,
+restores it after relaunch, and supports unlinking. Public Domain on the Addons
+page can now be enabled, disabled, and validated against its live manifest.
+Authenticated library/addon sync is prepared but not yet claimed complete.
 
 The output is `dist-ps4/IV0000-BREW00991_00-STREMIOPS4000000.pkg`.
-It is a bring-up build, not the Stremio application: on compatible jailbroken
-hardware it should open a purple 1080p Piglet surface, initialize a DualShock 4,
-append diagnostics to `/data/stremio-ps4/boot.log`, and exit with Circle.
+The current package is a native 1080p VideoOut application using DualShock 4
+navigation and PS4 networking. Firmware 13.02 with GoldHEN 2.4b18.12 is the
+currently confirmed hardware configuration.
 
 Version 0.03 parks on startup failure instead of returning into the PS4 crash
 reporter, logs the failing stage and error code, tolerates the optional shader
