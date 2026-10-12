@@ -47,6 +47,10 @@ with GoldHEN 2.4b18.12, validating direct VideoOut and confirming Piglet as the
 old crash boundary. Version 0.07 validated DualShock 4 input and clean shutdown.
 Version 0.08 adds the first native framebuffer UI shell: five labeled Stremio
 sections, visible focus, D-pad navigation and Circle exit.
+Version 0.09 makes a larger step toward the PS5 frontend: it packages and
+decodes the PS5 port's original navigation artwork, adopts its left rail and
+theme, implements five distinct screens, search overlay, content-grid
+navigation, settings toggles, L1/R1 switching, back routing and clean exit.
 
 The output is `dist-ps4/IV0000-BREW00991_00-STREMIOPS4000000.pkg`.
 It is a bring-up build, not the Stremio application: on compatible jailbroken

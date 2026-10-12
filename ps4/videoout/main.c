@@ -1,196 +1,185 @@
-// Direct PS4 VideoOut bring-up. This replaces the crashing Piglet/EGL path on
-// firmware 13.02 with the framebuffer API used by OpenOrbis's graphics sample.
-
+// Native PS4 frontend using the stable direct VideoOut path. Its layout,
+// assets, colors and controller routing are adapted from the PS5 frontend.
 #include <orbis/SystemService.h>
 #include <orbis/Pad.h>
 #include <orbis/UserService.h>
 #include <orbis/VideoOut.h>
 #include <orbis/libkernel.h>
-
 #include <stdint.h>
 #include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
+#define STBI_ONLY_PNG
+#define STBI_NO_HDR
+#define STBI_NO_LINEAR
+#define STB_IMAGE_IMPLEMENTATION
+#include "third_party/stb_image.h"
 
-uint64_t sceLibcHeapSize = 8 * 1024 * 1024;
+uint64_t sceLibcHeapSize = 24 * 1024 * 1024;
+enum { WIDTH = 1920, HEIGHT = 1080, BUFFER_COUNT = 2, PAGE_COUNT = 5 };
+static const uint32_t GROUND=0xff110b0cu, SURFACE=0xff292328u, SURFACE_HI=0xff3a333du;
+static const uint32_t ACCENT=0xfff55b7bu, ACCENT_SOFT=0xffff8ba5u;
+static const uint32_t INK=0xfff7f7f7u, INK_2=0xffc8c8c8u, INK_3=0xff8f8f8fu;
+typedef struct Image { unsigned char *pixels; int width, height; } Image;
+typedef struct AppState { int page, rail_focus, row, column, search; int settings[4]; } AppState;
+static const char *PAGE_NAMES[PAGE_COUNT]={"BOARD","DISCOVER","LIBRARY","ADDONS","SETTINGS"};
+static const char *ICON_NAMES[PAGE_COUNT]={"nav_board","nav_discover","nav_library","nav_addons","nav_settings"};
+static Image logo, search_icon, nav_line[PAGE_COUNT], nav_solid[PAGE_COUNT];
 
-enum { WIDTH = 1920, HEIGHT = 1080, BUFFER_COUNT = 2 };
-
-static void park_error(const char *message, int code)
-{
-    sceKernelDebugOutText(0, "[stremio-ps4] %s: 0x%08x\n", message, (unsigned)code);
-    for (;;)
-        sceKernelUsleep(100000);
+static void park_error(const char *message,int code){
+    sceKernelDebugOutText(0,"[stremio-ps4] %s: 0x%08x\n",message,(unsigned)code);
+    for(;;) sceKernelUsleep(100000);
 }
-
-static void fill_buffer(void *buffer, uint32_t color)
-{
-    uint32_t *pixels = (uint32_t *)buffer;
-    for (size_t pixel = 0; pixel < (size_t)WIDTH * HEIGHT; ++pixel)
-        pixels[pixel] = color;
+static void fill_buffer(void *buffer,uint32_t color){
+    uint32_t *pixels=(uint32_t*)buffer;
+    for(size_t i=0;i<(size_t)WIDTH*HEIGHT;++i) pixels[i]=color;
 }
-
-static void draw_rect(void *buffer, int x, int y, int width, int height, uint32_t color)
-{
-    if (x < 0) { width += x; x = 0; }
-    if (y < 0) { height += y; y = 0; }
-    if (x + width > WIDTH) width = WIDTH - x;
-    if (y + height > HEIGHT) height = HEIGHT - y;
-    if (width <= 0 || height <= 0) return;
-    uint32_t *pixels = (uint32_t *)buffer;
-    for (int row = y; row < y + height; ++row)
-        for (int column = x; column < x + width; ++column)
-            pixels[(size_t)row * WIDTH + column] = color;
+static void draw_rect(void *buffer,int x,int y,int w,int h,uint32_t color){
+    if(x<0){w+=x;x=0;} if(y<0){h+=y;y=0;}
+    if(x+w>WIDTH)w=WIDTH-x; if(y+h>HEIGHT)h=HEIGHT-y; if(w<=0||h<=0)return;
+    uint32_t *pixels=(uint32_t*)buffer;
+    for(int row=y;row<y+h;++row) for(int col=x;col<x+w;++col) pixels[(size_t)row*WIDTH+col]=color;
 }
-
-// Compact 5x7 capitals, encoded one column per byte (low seven bits are rows).
-static const uint8_t FONT[27][5] = {
-    {0,0,0,0,0}, {0x7e,0x09,0x09,0x09,0x7e}, {0x7f,0x49,0x49,0x49,0x36},
-    {0x3e,0x41,0x41,0x41,0x22}, {0x7f,0x41,0x41,0x22,0x1c}, {0x7f,0x49,0x49,0x49,0x41},
-    {0x7f,0x09,0x09,0x09,0x01}, {0x3e,0x41,0x49,0x49,0x7a}, {0x7f,0x08,0x08,0x08,0x7f},
-    {0x00,0x41,0x7f,0x41,0x00}, {0x20,0x40,0x41,0x3f,0x01}, {0x7f,0x08,0x14,0x22,0x41},
-    {0x7f,0x40,0x40,0x40,0x40}, {0x7f,0x02,0x0c,0x02,0x7f}, {0x7f,0x04,0x08,0x10,0x7f},
-    {0x3e,0x41,0x41,0x41,0x3e}, {0x7f,0x09,0x09,0x09,0x06}, {0x3e,0x41,0x51,0x21,0x5e},
-    {0x7f,0x09,0x19,0x29,0x46}, {0x46,0x49,0x49,0x49,0x31}, {0x01,0x01,0x7f,0x01,0x01},
-    {0x3f,0x40,0x40,0x40,0x3f}, {0x1f,0x20,0x40,0x20,0x1f}, {0x3f,0x40,0x38,0x40,0x3f},
-    {0x63,0x14,0x08,0x14,0x63}, {0x07,0x08,0x70,0x08,0x07}, {0x61,0x51,0x49,0x45,0x43}
-};
-
-static void draw_text(void *buffer, int x, int y, const char *text, int scale, uint32_t color)
-{
-    for (; *text; ++text, x += 6 * scale)
-    {
-        int glyph = *text >= 'A' && *text <= 'Z' ? *text - 'A' + 1 : 0;
-        for (int column = 0; column < 5; ++column)
-            for (int row = 0; row < 7; ++row)
-                if (FONT[glyph][column] & (1u << row))
-                    draw_rect(buffer, x + column * scale, y + row * scale, scale, scale, color);
-    }
+static const uint8_t FONT[27][5]={
+ {0,0,0,0,0},{0x7e,0x09,0x09,0x09,0x7e},{0x7f,0x49,0x49,0x49,0x36},
+ {0x3e,0x41,0x41,0x41,0x22},{0x7f,0x41,0x41,0x22,0x1c},{0x7f,0x49,0x49,0x49,0x41},
+ {0x7f,0x09,0x09,0x09,0x01},{0x3e,0x41,0x49,0x49,0x7a},{0x7f,0x08,0x08,0x08,0x7f},
+ {0,0x41,0x7f,0x41,0},{0x20,0x40,0x41,0x3f,0x01},{0x7f,0x08,0x14,0x22,0x41},
+ {0x7f,0x40,0x40,0x40,0x40},{0x7f,0x02,0x0c,0x02,0x7f},{0x7f,0x04,0x08,0x10,0x7f},
+ {0x3e,0x41,0x41,0x41,0x3e},{0x7f,0x09,0x09,0x09,0x06},{0x3e,0x41,0x51,0x21,0x5e},
+ {0x7f,0x09,0x19,0x29,0x46},{0x46,0x49,0x49,0x49,0x31},{1,1,0x7f,1,1},
+ {0x3f,0x40,0x40,0x40,0x3f},{0x1f,0x20,0x40,0x20,0x1f},{0x3f,0x40,0x38,0x40,0x3f},
+ {0x63,0x14,0x08,0x14,0x63},{0x07,0x08,0x70,0x08,0x07},{0x61,0x51,0x49,0x45,0x43}};
+static void draw_text(void *buffer,int x,int y,const char *text,int scale,uint32_t color){
+    for(;*text;++text,x+=6*scale){int glyph=*text>='A'&&*text<='Z'?*text-'A'+1:0;
+        for(int c=0;c<5;++c)for(int r=0;r<7;++r)if(FONT[glyph][c]&(1u<<r))
+            draw_rect(buffer,x+c*scale,y+r*scale,scale,scale,color);}
 }
-
-static void draw_screen(void *buffer, int selected)
-{
-    static const char *labels[5] = {"BOARD", "DISCOVER", "LIBRARY", "ADDONS", "SETTINGS"};
-    fill_buffer(buffer, 0xff10071fu);
-    draw_rect(buffer, 0, 0, WIDTH, 126, 0xff1d0d35u);
-    draw_text(buffer, 76, 42, "STREMIO PS", 6, 0xfff1ebffu);
-
-    for (int index = 0; index < 5; ++index)
-    {
-        const int x = 70 + index * 365;
-        const uint32_t panel = index == selected ? 0xff6f35ddu : 0xff2a2040u;
-        draw_rect(buffer, x, 210, 330, 148, panel);
-        if (index == selected)
-        {
-            draw_rect(buffer, x, 210, 330, 5, 0xffd8c4ffu);
-            draw_rect(buffer, x, 353, 330, 5, 0xffd8c4ffu);
-        }
-        draw_text(buffer, x + 28, 264, labels[index], 4, 0xffffffffu);
-    }
-
-    draw_text(buffer, 76, 470, "PS FOUR NATIVE UI", 5, 0xffc8b5e8u);
-    draw_rect(buffer, 76, 550, 1768, 310, 0xff1c142cu);
-    draw_text(buffer, 126, 610, labels[selected], 7, 0xffffffffu);
-    draw_text(buffer, 126, 730, "DPAD TO MOVE", 4, 0xffb7a8cbu);
-    draw_text(buffer, 126, 785, "CIRCLE TO EXIT", 4, 0xffb7a8cbu);
+static Image load_image(const char *name){
+    Image image={0}; char path[160]; int channels=0;
+    strcpy(path,"/app0/assets/");strcat(path,name);
+    image.pixels=stbi_load(path,&image.width,&image.height,&channels,4);
+    if(!image.pixels){strcpy(path,"assets/");strcat(path,name);image.pixels=stbi_load(path,&image.width,&image.height,&channels,4);}
+    return image;
 }
-
-static int open_pad(void)
-{
-    int result = scePadInit();
-    if (result != 0)
-        return result;
-    OrbisUserServiceInitializeParams parameters = {0};
-    parameters.priority = ORBIS_KERNEL_PRIO_FIFO_LOWEST;
-    result = sceUserServiceInitialize(&parameters);
-    if (result != 0 && result != (int)0x80960003)
-        return result;
-    int user = -1;
-    result = sceUserServiceGetInitialUser(&user);
-    if (result != 0)
-        return result;
-    return scePadOpen(user, 0, 0, 0);
+static void load_assets(void){
+    logo=load_image("logo.png");search_icon=load_image("search.png");char name[64];
+    for(int i=0;i<PAGE_COUNT;++i){strcpy(name,ICON_NAMES[i]);strcat(name,".png");nav_line[i]=load_image(name);
+        strcpy(name,ICON_NAMES[i]);strcat(name,"_o.png");nav_solid[i]=load_image(name);}
+    sceKernelDebugOutText(0,"[stremio-ps4] PS5 assets: logo=%dx%d\n",logo.width,logo.height);
 }
-
-int main(void)
-{
-    const size_t frame_size = (size_t)WIDTH * HEIGHT * 4;
-    const size_t alignment = 0x200000;
-    const size_t allocation_size =
-        ((frame_size * BUFFER_COUNT + alignment - 1) / alignment) * alignment;
-
-    int video = sceVideoOutOpen(ORBIS_VIDEO_USER_MAIN, ORBIS_VIDEO_OUT_BUS_MAIN, 0, 0);
-    if (video < 0)
-        park_error("sceVideoOutOpen", video);
-
-    off_t direct_offset = 0;
-    int result = sceKernelAllocateDirectMemory(
-        0, sceKernelGetDirectMemorySize(), allocation_size, alignment, 3, &direct_offset);
-    if (result < 0)
-        park_error("sceKernelAllocateDirectMemory", result);
-
-    void *video_memory = 0;
-    result = sceKernelMapDirectMemory(
-        &video_memory, allocation_size, 0x33, 0, direct_offset, alignment);
-    if (result < 0)
-        park_error("sceKernelMapDirectMemory", result);
-
-    void *buffers[BUFFER_COUNT];
-    buffers[0] = video_memory;
-    buffers[1] = (uint8_t *)video_memory + frame_size;
-
-    OrbisVideoOutBufferAttribute attribute;
-    sceVideoOutSetBufferAttribute(
-        &attribute, 0x80000000, 1, 0, WIDTH, HEIGHT, WIDTH);
-    result = sceVideoOutRegisterBuffers(video, 0, buffers, BUFFER_COUNT, &attribute);
-    if (result < 0)
-        park_error("sceVideoOutRegisterBuffers", result);
-
-    draw_screen(buffers[0], 0);
-    draw_screen(buffers[1], 0);
-
-    sceVideoOutSetFlipRate(video, 0);
-    result = sceVideoOutSubmitFlip(video, 0, ORBIS_VIDEO_OUT_FLIP_VSYNC, 1);
-    if (result < 0)
-        park_error("sceVideoOutSubmitFlip", result);
-
-    sceSystemServiceHideSplashScreen();
-    sceKernelDebugOutText(0, "[stremio-ps4] direct VideoOut frame presented\n");
-    const int pad = open_pad();
-    if (pad < 0)
-        park_error("scePadOpen", pad);
-
-    int active_buffer = 0;
-    int selected = 0;
-    int64_t flip_id = 2;
-    uint32_t previous_buttons = 0;
-    for (;;)
-    {
-        OrbisPadData state = {0};
-        if (scePadReadState(pad, &state) == 0)
-        {
-            const uint32_t pressed = state.buttons & ~previous_buttons;
-            previous_buttons = state.buttons;
-            if (pressed & ORBIS_PAD_BUTTON_LEFT)
-            {
-                selected = (selected + 4) % 5;
-                active_buffer ^= 1;
-                draw_screen(buffers[active_buffer], selected);
-                sceVideoOutSubmitFlip(video, active_buffer, ORBIS_VIDEO_OUT_FLIP_VSYNC,
-                                      flip_id++);
-            }
-            if (pressed & ORBIS_PAD_BUTTON_RIGHT)
-            {
-                selected = (selected + 1) % 5;
-                active_buffer ^= 1;
-                draw_screen(buffers[active_buffer], selected);
-                sceVideoOutSubmitFlip(video, active_buffer, ORBIS_VIDEO_OUT_FLIP_VSYNC,
-                                      flip_id++);
-            }
-            if (pressed & ORBIS_PAD_BUTTON_CIRCLE)
-            {
-                scePadClose(pad);
-                sceSystemServiceLoadExec("exit", 0);
-            }
-        }
-        sceKernelUsleep(16000);
-    }
+static void draw_image(void *buffer,const Image *image,int x,int y,int w,int h){
+    if(!image->pixels||image->width<=0||image->height<=0)return; uint32_t *target=(uint32_t*)buffer;
+    for(int dy=0;dy<h;++dy){int py=y+dy;if(py<0||py>=HEIGHT)continue;int sy=dy*image->height/h;
+        for(int dx=0;dx<w;++dx){int px=x+dx;if(px<0||px>=WIDTH)continue;int sx=dx*image->width/w;
+            const unsigned char *s=image->pixels+((size_t)sy*image->width+sx)*4;unsigned a=s[3];if(!a)continue;
+            uint32_t *d=&target[(size_t)py*WIDTH+px];unsigned dr=*d&255u,dg=(*d>>8)&255u,db=(*d>>16)&255u;
+            unsigned r=(s[0]*a+dr*(255-a))/255,g=(s[1]*a+dg*(255-a))/255,b=(s[2]*a+db*(255-a))/255;
+            *d=0xff000000u|(b<<16)|(g<<8)|r;}}
+}
+static void draw_focus(void *b,int x,int y,int w,int h){
+    draw_rect(b,x-5,y-5,w+10,5,INK);draw_rect(b,x-5,y+h,w+10,5,INK);
+    draw_rect(b,x-5,y,5,h,INK);draw_rect(b,x+w,y,5,h,INK);
+}
+static void draw_card(void *b,int x,int y,int w,int h,int seed,int focused,const char *title){
+    static const uint32_t colors[]={0xff7c304fu,0xff735239u,0xff3b626eu,0xff71415eu,0xff4c3978u};
+    draw_rect(b,x,y,w,h,colors[seed%5]);draw_rect(b,x,y+h-70,w,70,0xff1a151cu);
+    draw_text(b,x+14,y+h-48,title,3,INK);if(focused)draw_focus(b,x,y,w,h);
+}
+static void draw_rail(void *b,const AppState *s){
+    draw_rect(b,0,0,140,HEIGHT,0xff171117u);if(logo.pixels)draw_image(b,&logo,42,30,58,58);else draw_text(b,36,42,"S",7,ACCENT_SOFT);
+    for(int i=0;i<PAGE_COUNT;++i){int y=238+i*138,active=s->page==i,cursor=s->rail_focus&&s->row==i;
+        if(active||cursor)draw_rect(b,20,y,100,104,cursor?ACCENT:SURFACE_HI);
+        draw_image(b,(active||cursor)?&nav_solid[i]:&nav_line[i],46,y+14,48,48);
+        draw_text(b,28,y+78,PAGE_NAMES[i],2,(active||cursor)?INK:INK_3);if(cursor)draw_focus(b,20,y,100,104);}
+}
+static void draw_topbar(void *b,const AppState *s){
+    int x=190,y=34,w=620,h=60;draw_rect(b,x,y,w,h,s->search?SURFACE_HI:SURFACE);
+    draw_image(b,&search_icon,x+22,y+16,28,28);draw_text(b,x+72,y+20,s->search?"SEARCH MODE":"SEARCH MOVIES AND SERIES",3,s->search?INK:INK_3);
+    if(s->search)draw_focus(b,x,y,w,h);draw_text(b,1600,54,"STREMIO PS FOUR",3,INK_2);
+}
+static void draw_board(void *b,const AppState *s){
+    draw_text(b,190,154,"POPULAR NOW",6,INK);draw_text(b,190,220,"MOVIES AND SERIES FROM YOUR ADDONS",3,INK_2);
+    const char *titles[]={"FEATURED","TRENDING","MOVIES","SERIES","RECENT"};
+    for(int i=0;i<5;++i)draw_card(b,190+i*290,300,250,360,i,!s->rail_focus&&s->row==0&&s->column==i,titles[i]);
+    draw_text(b,190,728,"CONTINUE WATCHING",5,INK);
+    for(int i=0;i<4;++i){int x=190+i*365;draw_rect(b,x,800,330,145,s->column==i&&s->row==1?SURFACE_HI:SURFACE);draw_rect(b,x,930,330,7,ACCENT);
+        if(!s->rail_focus&&s->row==1&&s->column==i)draw_focus(b,x,800,330,145);}
+}
+static void draw_discover(void *b,const AppState *s){
+    draw_text(b,190,154,"DISCOVER",7,INK);const char *filters[]={"MOVIES","POPULAR","ALL GENRES"};
+    for(int i=0;i<3;++i){draw_rect(b,190+i*330,238,300,66,i==0?ACCENT:SURFACE);draw_text(b,214+i*330,258,filters[i],3,INK);}
+    const char *titles[]={"ACTION","DRAMA","COMEDY","THRILLER","FAMILY"};
+    for(int i=0;i<5;++i)draw_card(b,190+i*290,370,250,360,i+2,!s->rail_focus&&s->column==i,titles[i]);
+    draw_text(b,190,800,"CHANGE FILTERS WITH CROSS",3,INK_3);
+}
+static void draw_library(void *b,const AppState *s){
+    draw_text(b,190,154,"LIBRARY",7,INK);draw_text(b,190,232,"YOUR SAVED MOVIES AND SERIES",3,INK_2);
+    for(int i=0;i<5;++i)draw_card(b,190+i*290,330,250,360,i+1,!s->rail_focus&&s->column==i,"SAVED");
+    draw_rect(b,190,780,540,82,ACCENT);draw_text(b,230,808,"SIGN IN TO SYNC LIBRARY",4,INK);
+}
+static void draw_addons(void *b,const AppState *s){
+    draw_text(b,190,154,"ADDONS",7,INK);draw_text(b,190,232,"MANAGE YOUR STREMIO SOURCES",3,INK_2);
+    const char *names[]={"CINEMETA","PUBLIC DOMAIN","LOCAL FILES","COMMUNITY"};
+    for(int i=0;i<4;++i){int y=320+i*145;draw_rect(b,190,y,1340,110,!s->rail_focus&&s->row==i?SURFACE_HI:SURFACE);
+        draw_rect(b,214,y+20,70,70,i==0?ACCENT:0xff584667u);draw_text(b,320,y+26,names[i],5,INK);
+        draw_text(b,320,y+76,i<2?"INSTALLED":"AVAILABLE",3,i<2?ACCENT_SOFT:INK_3);if(!s->rail_focus&&s->row==i)draw_focus(b,190,y,1340,110);}
+}
+static void draw_settings(void *b,const AppState *s){
+    draw_text(b,190,154,"SETTINGS",7,INK);draw_text(b,190,232,"PLAYBACK AND APPLICATION",3,INK_2);
+    const char *names[]={"BUILTIN TORRENTS","AUTO SUBTITLES","AUTOPLAY NEXT","UI SOUNDS"};
+    for(int i=0;i<4;++i){int y=320+i*130;draw_rect(b,190,y,1200,96,!s->rail_focus&&s->row==i?SURFACE_HI:SURFACE);
+        draw_text(b,230,y+32,names[i],4,INK);draw_rect(b,1190,y+20,160,56,s->settings[i]?ACCENT:0xff514951u);
+        draw_text(b,1230,y+38,s->settings[i]?"ON":"OFF",3,INK);if(!s->rail_focus&&s->row==i)draw_focus(b,190,y,1200,96);}
+}
+static void draw_footer(void *b,const AppState *s){
+    draw_rect(b,140,1008,1780,72,0xff171117u);draw_text(b,190,1030,s->rail_focus?"UP DOWN SELECT   CROSS OPEN":"DPAD NAVIGATE   TRIANGLE SEARCH",3,INK_2);
+    draw_text(b,1410,1030,"L ONE R ONE PAGES   CIRCLE BACK",3,INK_2);
+}
+static void draw_screen(void *b,const AppState *s){
+    fill_buffer(b,GROUND);draw_rail(b,s);draw_topbar(b,s);
+    if(s->search){draw_text(b,190,190,"SEARCH",7,INK);draw_text(b,190,290,"ON SCREEN KEYBOARD COMING WITH NETWORK SEARCH",4,INK_2);
+        draw_rect(b,190,390,1450,260,SURFACE);draw_text(b,250,485,"PRESS TRIANGLE OR CIRCLE TO RETURN",4,ACCENT_SOFT);}
+    else switch(s->page){case 0:draw_board(b,s);break;case 1:draw_discover(b,s);break;case 2:draw_library(b,s);break;case 3:draw_addons(b,s);break;default:draw_settings(b,s);}
+    draw_footer(b,s);
+}
+static int open_pad(void){
+    int result=scePadInit();if(result!=0)return result;OrbisUserServiceInitializeParams p={0};p.priority=ORBIS_KERNEL_PRIO_FIFO_LOWEST;
+    result=sceUserServiceInitialize(&p);if(result!=0&&result!=(int)0x80960003)return result;int user=-1;
+    result=sceUserServiceGetInitialUser(&user);if(result!=0)return result;return scePadOpen(user,0,0,0);
+}
+static void reset_cursor(AppState *s){s->row=0;s->column=0;}
+static int route_input(AppState *s,uint32_t pressed){
+    if(s->search){if(pressed&(ORBIS_PAD_BUTTON_TRIANGLE|ORBIS_PAD_BUTTON_CIRCLE))s->search=0;return pressed!=0;}
+    if(pressed&ORBIS_PAD_BUTTON_TRIANGLE){s->search=1;return 1;}
+    if(pressed&ORBIS_PAD_BUTTON_L1){s->page=(s->page+PAGE_COUNT-1)%PAGE_COUNT;s->rail_focus=0;reset_cursor(s);return 1;}
+    if(pressed&ORBIS_PAD_BUTTON_R1){s->page=(s->page+1)%PAGE_COUNT;s->rail_focus=0;reset_cursor(s);return 1;}
+    if(s->rail_focus){if((pressed&ORBIS_PAD_BUTTON_UP)&&s->row>0)--s->row;if((pressed&ORBIS_PAD_BUTTON_DOWN)&&s->row<PAGE_COUNT-1)++s->row;
+        if(pressed&(ORBIS_PAD_BUTTON_RIGHT|ORBIS_PAD_BUTTON_CROSS)){s->page=s->row;s->rail_focus=0;reset_cursor(s);}if(pressed&ORBIS_PAD_BUTTON_CIRCLE){s->rail_focus=0;reset_cursor(s);}return pressed!=0;}
+    if(pressed&ORBIS_PAD_BUTTON_LEFT){if(s->column>0&&s->page<3)--s->column;else{s->rail_focus=1;s->row=s->page;}}
+    if((pressed&ORBIS_PAD_BUTTON_RIGHT)&&s->page<3&&s->column<4)++s->column;
+    if(pressed&ORBIS_PAD_BUTTON_UP){if((s->page==0||s->page>=3)&&s->row>0)--s->row;}
+    if(pressed&ORBIS_PAD_BUTTON_DOWN){if(s->page==0&&s->row<1){++s->row;if(s->column>3)s->column=3;}else if(s->page>=3&&s->row<3)++s->row;}
+    if((pressed&ORBIS_PAD_BUTTON_CROSS)&&s->page==4)s->settings[s->row]^=1;
+    if(pressed&ORBIS_PAD_BUTTON_CIRCLE){if(s->page!=0){s->page=0;reset_cursor(s);}else return -1;}return pressed!=0;
+}
+int main(void){
+    const size_t frame_size=(size_t)WIDTH*HEIGHT*4,alignment=0x200000;
+    const size_t allocation_size=((frame_size*BUFFER_COUNT+alignment-1)/alignment)*alignment;
+    int video=sceVideoOutOpen(ORBIS_VIDEO_USER_MAIN,ORBIS_VIDEO_OUT_BUS_MAIN,0,0);if(video<0)park_error("sceVideoOutOpen",video);
+    off_t direct_offset=0;int result=sceKernelAllocateDirectMemory(0,sceKernelGetDirectMemorySize(),allocation_size,alignment,3,&direct_offset);
+    if(result<0)park_error("sceKernelAllocateDirectMemory",result);void *video_memory=0;
+    result=sceKernelMapDirectMemory(&video_memory,allocation_size,0x33,0,direct_offset,alignment);if(result<0)park_error("sceKernelMapDirectMemory",result);
+    void *buffers[BUFFER_COUNT]={video_memory,(uint8_t*)video_memory+frame_size};OrbisVideoOutBufferAttribute attribute;
+    sceVideoOutSetBufferAttribute(&attribute,0x80000000,1,0,WIDTH,HEIGHT,WIDTH);
+    result=sceVideoOutRegisterBuffers(video,0,buffers,BUFFER_COUNT,&attribute);if(result<0)park_error("sceVideoOutRegisterBuffers",result);
+    load_assets();AppState state={0};for(int i=0;i<4;++i)state.settings[i]=1;
+    draw_screen(buffers[0],&state);draw_screen(buffers[1],&state);sceVideoOutSetFlipRate(video,0);
+    result=sceVideoOutSubmitFlip(video,0,ORBIS_VIDEO_OUT_FLIP_VSYNC,1);if(result<0)park_error("sceVideoOutSubmitFlip",result);
+    sceSystemServiceHideSplashScreen();const int pad=open_pad();if(pad<0)park_error("scePadOpen",pad);
+    int active_buffer=0;int64_t flip_id=2;uint32_t previous_buttons=0;
+    for(;;){OrbisPadData input={0};if(scePadReadState(pad,&input)==0){uint32_t pressed=input.buttons&~previous_buttons;previous_buttons=input.buttons;
+        int changed=route_input(&state,pressed);if(changed<0){scePadClose(pad);sceSystemServiceLoadExec("exit",0);}
+        if(changed>0){active_buffer^=1;draw_screen(buffers[active_buffer],&state);sceVideoOutSubmitFlip(video,active_buffer,ORBIS_VIDEO_OUT_FLIP_VSYNC,flip_id++);}}
+        sceKernelUsleep(16000);}
 }

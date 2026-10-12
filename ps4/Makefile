@@ -11,6 +11,10 @@ TITLE       := Stremio PS4 (Bring-up)
 VERSION     := 0.03
 TITLE_ID    := BREW00991
 CONTENT_ID  := IV0000-BREW00991_00-STREMIOPS4000000
+UI_ASSETS   := logo.png search.png \
+	nav_board.png nav_board_o.png nav_discover.png nav_discover_o.png \
+	nav_library.png nav_library_o.png nav_addons.png nav_addons_o.png \
+	nav_settings.png nav_settings_o.png
 
 TOOLCHAIN   := $(OO_PS4_TOOLCHAIN)
 ROOT        := $(abspath ..)
@@ -39,11 +43,11 @@ FSELF_FLAGS := --paid 0x3800000000000011
 endif
 
 ifeq ($(BUILD_MODE),videoout)
-TITLE       := Stremio PS4 (VideoOut)
-VERSION     := 0.08
+TITLE       := Stremio PS4
+VERSION     := 0.09
 SOURCE      := videoout/main.c
 OBJECT      := $(OBJDIR)/videoout.o
-LIBS        := -lc -lkernel -lSceVideoOut -lSceSystemService -lScePad -lSceUserService
+LIBS        := -lc -lm -lkernel -lSceVideoOut -lSceSystemService -lScePad -lSceUserService
 EXTRAFLAGS  := -O2 -DPLATFORM_PS4=1
 FSELF_FLAGS := --paid 0x3800000000000011
 endif
@@ -65,7 +69,7 @@ endif
 
 TOOLS       := $(TOOLCHAIN)/bin/$(HOST)
 CFLAGS      := --target=x86_64-pc-freebsd12-elf -fPIC -funwind-tables -c \
-	$(EXTRAFLAGS) -isysroot $(TOOLCHAIN) -isystem $(TOOLCHAIN)/include -I$(ROOT)/src
+	$(EXTRAFLAGS) -isysroot $(TOOLCHAIN) -isystem $(TOOLCHAIN)/include -I$(ROOT) -I$(ROOT)/src
 CXXFLAGS    := $(CFLAGS) -isystem $(TOOLCHAIN)/include/c++/v1
 LDFLAGS     := -m elf_x86_64 -pie --script $(TOOLCHAIN)/link.x --eh-frame-hdr \
 	-L$(TOOLCHAIN)/lib $(LIBS) $(TOOLCHAIN)/lib/crt1.o
@@ -107,9 +111,10 @@ $(STAGE)/sce_sys/param.sfo: Makefile
 	$(TOOLS)/PkgTool.Core sfo_setentry $@ VERSION --type Utf8 --maxsize 8 --value '$(VERSION)'
 
 $(STAGE)/.ready: $(BUILD)/eboot.bin $(STAGE)/sce_sys/param.sfo $(ROOT)/app/sce_sys/icon0.png
-	mkdir -p $(STAGE)/sce_module $(STAGE)/sce_sys/about
+	mkdir -p $(STAGE)/sce_module $(STAGE)/sce_sys/about $(STAGE)/assets
 	cp $(BUILD)/eboot.bin $(STAGE)/eboot.bin
 	cp $(ROOT)/app/sce_sys/icon0.png $(STAGE)/sce_sys/icon0.png
+	@if [ "$(BUILD_MODE)" = "videoout" ]; then for asset in $(UI_ASSETS); do cp $(ROOT)/app/assets/icons_4k/$$asset $(STAGE)/assets/; done; fi
 	cp $(TOOLCHAIN)/samples/piglet/sce_module/libc.prx $(STAGE)/sce_module/libc.prx
 	cp $(TOOLCHAIN)/samples/piglet/sce_module/libSceFios2.prx $(STAGE)/sce_module/libSceFios2.prx
 	cp $(TOOLCHAIN)/samples/piglet/sce_sys/about/right.sprx $(STAGE)/sce_sys/about/right.sprx
@@ -118,7 +123,7 @@ $(STAGE)/.ready: $(BUILD)/eboot.bin $(STAGE)/sce_sys/param.sfo $(ROOT)/app/sce_s
 $(PKG): $(STAGE)/.ready
 	mkdir -p $(DIST)
 	cd $(STAGE) && $(TOOLS)/create-gp4 -out pkg.gp4 --content-id=$(CONTENT_ID) \
-		--files "eboot.bin sce_module/libc.prx sce_module/libSceFios2.prx sce_sys/about/right.sprx sce_sys/param.sfo sce_sys/icon0.png"
+		--files "eboot.bin sce_module/libc.prx sce_module/libSceFios2.prx sce_sys/about/right.sprx sce_sys/param.sfo sce_sys/icon0.png $(UI_ASSETS:%=assets/%)"
 	cd $(STAGE) && $(TOOLS)/PkgTool.Core pkg_build pkg.gp4 $(DIST)
 
 clean:
