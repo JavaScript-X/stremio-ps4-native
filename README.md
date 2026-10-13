@@ -36,6 +36,10 @@ scrolling episode navigation, and episode-specific addon stream resolution.
 Version 0.26 adds live Cinemeta background and title-logo artwork, animated card
 focus and ambient violet lighting, multi-frame UI redraws, and PS5-style toast
 feedback for library, settings, addons, account linking, and catalog refreshes.
+Version 0.27 retimes interaction animation to seven frames, removes continuous
+toast redraws, defers expensive backdrop blending until animation settles, and
+adds an optional measured FPS/frame-time overlay compatible with GoldHEN's
+independent Game Overlay counter.
 
 The upstream PS5 documentation is retained below while features are moved to
 the PS4 platform layer. PS5 installation instructions and artifacts do not

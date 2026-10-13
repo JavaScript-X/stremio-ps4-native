@@ -112,6 +112,12 @@ Version 0.26 ports more of the PS5 presentation layer: live background and logo
 artwork on title flows, animated focus-card lift and colour pulses, ambient
 backdrop motion, multi-frame rendering after interaction, and toast feedback for
 saved titles, settings, addons, account actions, and catalog refreshes.
+Version 0.27 optimizes animation scheduling: seven-frame transitions replace the
+long redraw window, toasts no longer redraw the full 1080p surface while they
+remain visible, and live backdrop blending is deferred to the settled frame.
+Settings now includes a native measured FPS/frame-time overlay. GoldHEN's Game
+Overlay remains separately compatible through the standard VideoOut flip path;
+the app does not install a competing SubmitFlip hook.
 
 The output is `dist-ps4/IV0000-BREW00991_00-STREMIOPS4000000.pkg`.
 The current package is a native 1080p VideoOut application using DualShock 4
