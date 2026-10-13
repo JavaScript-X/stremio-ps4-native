@@ -39,7 +39,8 @@ static const char *PAGE_NAMES[PAGE_COUNT]={"Board","Discover","Library","Addons"
 static const char *ICON_NAMES[PAGE_COUNT]={"nav_board","nav_discover","nav_library","nav_addons","nav_settings"};
 static Image logo, wordmark, search_icon, cross_icon, circle_icon, triangle_icon, square_icon, options_icon;
 static Image dpad_icon, l1_icon, r1_icon, play_icon, play_small_icon, pause_icon, check_icon, check_small_icon;
-static Image chevron_icon, chevron_down_icon, logo_large, nav_line[PAGE_COUNT], nav_solid[PAGE_COUNT];
+static Image chevron_icon, chevron_down_icon, logo_large, nav_line[PAGE_COUNT], nav_solid[PAGE_COUNT];static char hero_id[24];
+static Image hero_background, hero_logo;static int animation_frames;static unsigned ui_phase;static char toast_text[96];static int toast_frames;
 static unsigned char *font_atlas;static stbtt_bakedchar font_chars[96];static int font_ready;
 typedef struct CatalogCard {
     char id[24], name[40], type[12], year[16], runtime[24], rating[12], genres[96];
@@ -201,14 +202,18 @@ static void parse_genres(const char *json,char *out,size_t capacity){
         if(used&&used+3<capacity){out[used++]=' ';out[used++]=' ';}while(*p&&*p!='\"'&&used+1<capacity){char c=*p++;out[used++]=c>='a'&&c<='z'?c-32:c;}if(*p=='\"')++p;}out[used]=0;
 }
 static void load_metadata(CatalogCard *card){
-    if(card->metadata_loaded||!card->id[0])return;char url[256];strcpy(url,"https://v3-cinemeta.strem.io/meta/");
+    if(!card->id[0]||(card->metadata_loaded&&!strcmp(hero_id,card->id)))return;char url[256];strcpy(url,"https://v3-cinemeta.strem.io/meta/");
     strcat(url,card->type[0]?card->type:"MOVIE");for(char *p=url;*p;++p)if(*p>='A'&&*p<='Z')*p+=32;
     strcat(url,"/");strcat(url,card->id);strcat(url,".json");size_t size=0;unsigned char *json=http_get(url,1024*1024,&size);
     if(!json)return;const char *p=(char*)json;const char *v;
     if((v=strstr(p,"\"description\":\"")))json_value(v,"\"description\":\"",card->description,sizeof(card->description),0);
     if((v=strstr(p,"\"runtime\":\"")))json_value(v,"\"runtime\":\"",card->runtime,sizeof(card->runtime),1);
     if((v=strstr(p,"\"imdbRating\":\"")))json_value(v,"\"imdbRating\":\"",card->rating,sizeof(card->rating),1);
-    parse_genres(p,card->genres,sizeof(card->genres));card->metadata_loaded=1;free(json);
+    parse_genres(p,card->genres,sizeof(card->genres));
+    char art_url[384];if(hero_background.pixels){stbi_image_free(hero_background.pixels);memset(&hero_background,0,sizeof(hero_background));}if(hero_logo.pixels){stbi_image_free(hero_logo.pixels);memset(&hero_logo,0,sizeof(hero_logo));}
+    if((v=strstr(p,"\"background\":\""))){json_value(v,"\"background\":\"",art_url,sizeof(art_url),0);if(strlen(art_url)+4<sizeof(art_url))strcat(art_url,".jpg");size_t art_size=0;unsigned char *encoded=http_get(art_url,5*1024*1024,&art_size);if(encoded){int channels=0;hero_background.pixels=stbi_load_from_memory(encoded,(int)art_size,&hero_background.width,&hero_background.height,&channels,4);free(encoded);}}
+    if((v=strstr(p,"\"logo\":\""))){json_value(v,"\"logo\":\"",art_url,sizeof(art_url),0);if(strlen(art_url)+4<sizeof(art_url))strcat(art_url,".png");size_t art_size=0;unsigned char *encoded=http_get(art_url,2*1024*1024,&art_size);if(encoded){int channels=0;hero_logo.pixels=stbi_load_from_memory(encoded,(int)art_size,&hero_logo.width,&hero_logo.height,&channels,4);free(encoded);}}
+    strncpy(hero_id,card->id,sizeof(hero_id)-1);card->metadata_loaded=1;free(json);
 }
 static void load_episode_catalog(CatalogCard *card){
     if(!strcmp(episode_series_id,card->id)&&episode_count)return;episode_count=max_season=0;episode_series_id[0]=0;
@@ -270,9 +275,7 @@ static void draw_vgradient(void *b,int x,int y,int w,int h,uint32_t top,uint32_t
         unsigned r=(((top)&255u)*(255-t)+((bottom)&255u)*t)/255,g=(((top>>8)&255u)*(255-t)+((bottom>>8)&255u)*t)/255,bl=(((top>>16)&255u)*(255-t)+((bottom>>16)&255u)*t)/255;
         draw_rect(b,x,y+row,w,1,0xff000000u|(bl<<16)|(g<<8)|r);}
 }
-static void draw_page_backdrop(void *b){
-    fill_buffer(b,GROUND);draw_vgradient(b,140,0,1780,260,0xff251338u,GROUND);draw_vgradient(b,140,900,1780,180,GROUND,0xff080609u);
-}
+static void draw_page_backdrop(void *b,const AppState *s);
 static const uint8_t FONT[27][5]={
  {0,0,0,0,0},{0x7e,0x09,0x09,0x09,0x7e},{0x7f,0x49,0x49,0x49,0x36},
  {0x3e,0x41,0x41,0x41,0x22},{0x7f,0x41,0x41,0x22,0x1c},{0x7f,0x49,0x49,0x49,0x41},
@@ -338,11 +341,21 @@ static void draw_image_rounded(void *buffer,const Image *image,int x,int y,int w
         int sx=dx*image->width/w;const unsigned char *s=image->pixels+((size_t)sy*image->width+sx)*4;unsigned a=s[3];if(!a)continue;uint32_t *d=&target[(size_t)py*WIDTH+px];unsigned dr=*d&255u,dg=(*d>>8)&255u,db=(*d>>16)&255u;
         *d=0xff000000u|(((s[0]*a+db*(255-a))/255)<<16)|(((s[1]*a+dg*(255-a))/255)<<8)|((s[2]*a+dr*(255-a))/255);}}
 }
+static void draw_image_alpha(void *buffer,const Image *image,int x,int y,int w,int h,unsigned opacity){
+    if(!image->pixels||!opacity)return;uint32_t *target=(uint32_t*)buffer;for(int dy=0;dy<h;++dy){int py=y+dy;if(py<0||py>=HEIGHT)continue;int sy=dy*image->height/h;
+        for(int dx=0;dx<w;++dx){int px=x+dx;if(px<0||px>=WIDTH)continue;int sx=dx*image->width/w;const unsigned char *s=image->pixels+((size_t)sy*image->width+sx)*4;unsigned a=s[3]*opacity/255;if(!a)continue;
+            uint32_t *d=&target[(size_t)py*WIDTH+px];unsigned blue=*d&255u,green=(*d>>8)&255u,red=(*d>>16)&255u;*d=0xff000000u|(((s[0]*a+red*(255-a))/255)<<16)|(((s[1]*a+green*(255-a))/255)<<8)|((s[2]*a+blue*(255-a))/255);}}
+}
+static void draw_page_backdrop(void *b,const AppState *s){
+    fill_buffer(b,GROUND);unsigned pulse=(ui_phase%40<20)?(ui_phase%20):(40-ui_phase%40);uint32_t violet=0xff000000u|((0x25u+pulse/3)<<16)|(0x13u<<8)|(0x38u+pulse);
+    draw_vgradient(b,140,0,1780,280,violet,GROUND);if((s->detail||s->episodes||s->streams)&&hero_background.pixels)draw_image_alpha(b,&hero_background,720,80,1200,850,42);draw_vgradient(b,140,820,1780,260,0xff0c0b11u,0xff080609u);
+}
 static void draw_focus(void *b,int x,int y,int w,int h){
-    draw_round_outline(b,x-8,y-8,w+16,h+16,24,4,0xff704bddu);
+    uint32_t glow=(ui_phase%20<10)?0xff704bddu:0xff9a70ffu;draw_round_outline(b,x-8,y-8,w+16,h+16,24,4,glow);
     draw_round_outline(b,x-4,y-4,w+8,h+8,20,3,INK);
 }
 static void draw_card(void *b,int x,int y,int w,int h,int seed,int focused,const char *title){
+    int grow=focused?4+animation_frames/5:0;if(grow){x-=grow;y-=grow;w+=grow*2;h+=grow*2;}
     static const uint32_t colors[]={0xff49325fu,0xff41305au,0xff34284du,0xff3d2d55u,0xff2c2342u};int poster_h=h-58;
     draw_round_rect(b,x+8,y+14,w,poster_h,20,0xff050405u);draw_round_rect(b,x,y,w,poster_h,18,colors[seed%5]);
     if(seed<15&&live_cards[seed].poster.pixels)draw_image_rounded(b,&live_cards[seed].poster,x,y,w,poster_h,18);
@@ -440,7 +453,7 @@ static void draw_detail(void *b,const AppState *s){
     int index=s->detail_index;if(index<0||index>=15||!live_cards[index].name[0])return;CatalogCard *card=&live_cards[index];
     draw_text(b,190,140,"TITLE DETAILS",5,ACCENT_SOFT);
     draw_round_rect(b,190,220,360,540,24,SURFACE);if(card->poster.pixels)draw_image_rounded(b,&card->poster,190,220,360,540,24);
-    char title[41]={0};strncpy(title,card->name,sizeof(title)-1);draw_text(b,610,230,title,strlen(title)>22?3:5,INK);
+    char title[41]={0};strncpy(title,card->name,sizeof(title)-1);if(hero_logo.pixels)draw_image(b,&hero_logo,610,205,470,90);else draw_text(b,610,230,title,strlen(title)>22?3:5,INK);
     draw_round_rect(b,610,305,150,48,24,0xff432d6fu);draw_text(b,642,318,card->type,3,ACCENT_SOFT);draw_text(b,800,318,card->year,3,INK_2);
     draw_text(b,610,375,card->runtime,3,INK_2);draw_round_rect(b,770,364,104,40,10,0xff18c5f5u);draw_text(b,790,375,card->rating,3,0xff0c0b11u);draw_text(b,915,375,card->genres,2,INK_3);
     draw_wrapped(b,610,420,card->description[0]?card->description:"DESCRIPTION NOT AVAILABLE",43,7);
@@ -507,15 +520,17 @@ static void draw_footer(void *b,const AppState *s){
     x=draw_prompt(b,&triangle_icon,"SEARCH",x,1025);x=draw_prompt(b,&l1_icon,"PAGES",x,1025);
     x=draw_prompt(b,&r1_icon,"PAGES",x,1025);draw_prompt(b,&circle_icon,"BACK",x,1025);
 }
+static void show_toast(const char *message){strncpy(toast_text,message,sizeof(toast_text)-1);toast_text[sizeof(toast_text)-1]=0;toast_frames=90;}
+static void draw_toast(void *b){if(!toast_frames||!toast_text[0])return;int w=520,x=WIDTH-w-70,y=900;draw_round_rect(b,x+8,y+10,w,70,35,0xff050405u);draw_round_rect(b,x,y,w,70,35,0xff3b343du);draw_image(b,&check_small_icon,x+24,y+21,28,28);draw_text(b,x+70,y+22,toast_text,3,INK);}
 static void draw_screen(void *b,const AppState *s){
-    draw_page_backdrop(b);draw_rail(b,s);draw_topbar(b,s);
+    draw_page_backdrop(b,s);draw_rail(b,s);draw_topbar(b,s);
     if(s->account)draw_account(b,s);
     else if(s->episodes)draw_episodes(b,s);
     else if(s->streams)draw_streams(b,s);
     else if(s->detail)draw_detail(b,s);
     else if(s->search)draw_search(b,s);
     else switch(s->page){case 0:draw_board(b,s);break;case 1:draw_discover(b,s);break;case 2:draw_library(b,s);break;case 3:draw_addons(b,s);break;default:draw_settings(b,s);}
-    draw_footer(b,s);
+    draw_footer(b,s);draw_toast(b);
 }
 static int open_pad(void){
     int result=scePadInit();if(result!=0)return result;OrbisUserServiceInitializeParams p={0};p.priority=ORBIS_KERNEL_PRIO_FIFO_LOWEST;
@@ -526,8 +541,8 @@ static void reset_cursor(AppState *s){s->row=0;s->column=0;}
 static int route_input(AppState *s,uint32_t pressed){
     if(s->account){
         if(pressed&ORBIS_PAD_BUTTON_CIRCLE)s->account=0;
-        if((pressed&ORBIS_PAD_BUTTON_CROSS)&&account_status!=4)poll_device_link();
-        if(pressed&ORBIS_PAD_BUTTON_SQUARE){if(account_status==4){auth_key[0]=link_code[0]=0;account_status=0;save_account();}else create_device_link();}return pressed!=0;
+        if((pressed&ORBIS_PAD_BUTTON_CROSS)&&account_status!=4){poll_device_link();show_toast(account_status==4?"Account linked":"Approval not received yet");}
+        if(pressed&ORBIS_PAD_BUTTON_SQUARE){if(account_status==4){auth_key[0]=link_code[0]=0;account_status=0;save_account();show_toast("Account unlinked");}else{create_device_link();show_toast("New link code created");}}return pressed!=0;
     }
     if(s->episodes){
         if(pressed&ORBIS_PAD_BUTTON_CIRCLE){s->episodes=0;return 1;}
@@ -549,7 +564,7 @@ static int route_input(AppState *s,uint32_t pressed){
         if(pressed&ORBIS_PAD_BUTTON_CROSS){CatalogCard *card=&live_cards[s->detail_index];s->stream_cursor=0;selected_video_id[0]=0;
             if(!strcmp(card->type,"SERIES")){load_episode_catalog(card);s->season=1;s->episode_cursor=first_episode_in_season(1);if(s->episode_cursor<0){s->season=max_season;s->episode_cursor=first_episode_in_season(max_season);}s->episodes=1;}
             else {load_stream_sources(card);s->streams=1;}}
-        if(pressed&ORBIS_PAD_BUTTON_SQUARE){live_cards[s->detail_index].saved^=1;save_state(s);}
+        if(pressed&ORBIS_PAD_BUTTON_SQUARE){live_cards[s->detail_index].saved^=1;save_state(s);show_toast(live_cards[s->detail_index].saved?"Added to Library":"Removed from Library");}
         return pressed!=0;
     }
     if(s->search){
@@ -578,7 +593,7 @@ static int route_input(AppState *s,uint32_t pressed){
         return pressed!=0;
     }
     if(pressed&ORBIS_PAD_BUTTON_TRIANGLE){s->search=1;return 1;}
-    if((pressed&ORBIS_PAD_BUTTON_OPTIONS)&&s->page==0){refresh_catalogs();return 1;}
+    if((pressed&ORBIS_PAD_BUTTON_OPTIONS)&&s->page==0){refresh_catalogs();show_toast("Catalogs refreshed");return 1;}
     if((pressed&ORBIS_PAD_BUTTON_SQUARE)&&s->page==1){s->discover_series^=1;s->column=0;return 1;}
     if(pressed&ORBIS_PAD_BUTTON_L1){s->page=(s->page+PAGE_COUNT-1)%PAGE_COUNT;s->rail_focus=0;reset_cursor(s);return 1;}
     if(pressed&ORBIS_PAD_BUTTON_R1){s->page=(s->page+1)%PAGE_COUNT;s->rail_focus=0;reset_cursor(s);return 1;}
@@ -588,14 +603,14 @@ static int route_input(AppState *s,uint32_t pressed){
         if(pressed&ORBIS_PAD_BUTTON_LEFT){if((s->row%2)==1)--s->row;else{s->rail_focus=1;s->row=s->page;}}
         if((pressed&ORBIS_PAD_BUTTON_RIGHT)&&(s->row%2)==0)++s->row;
         if((pressed&ORBIS_PAD_BUTTON_UP)&&s->row>=2)s->row-=2;if((pressed&ORBIS_PAD_BUTTON_DOWN)&&s->row<2)s->row+=2;
-        if((pressed&ORBIS_PAD_BUTTON_CROSS)&&s->row==1){public_domain_enabled^=1;save_account();validate_public_domain();}
+        if((pressed&ORBIS_PAD_BUTTON_CROSS)&&s->row==1){public_domain_enabled^=1;save_account();validate_public_domain();show_toast(public_domain_enabled?"Public Domain enabled":"Public Domain disabled");}
         if(pressed&ORBIS_PAD_BUTTON_CIRCLE){s->page=0;reset_cursor(s);}return pressed!=0;
     }
     if(pressed&ORBIS_PAD_BUTTON_LEFT){if(s->column>0&&s->page<3)--s->column;else{s->rail_focus=1;s->row=s->page;}}
     if((pressed&ORBIS_PAD_BUTTON_RIGHT)&&s->page<3&&s->column<4)++s->column;
     if(pressed&ORBIS_PAD_BUTTON_UP){if((s->page==0||s->page>=3)&&s->row>0)--s->row;}
     if(pressed&ORBIS_PAD_BUTTON_DOWN){if(s->page==0&&s->row<1){++s->row;if(s->column>3)s->column=3;}else if(s->page==3&&s->row<3)++s->row;else if(s->page==4&&s->row<4)++s->row;}
-    if((pressed&ORBIS_PAD_BUTTON_CROSS)&&s->page==4){if(s->row==4){s->account=1;if(!auth_key[0]&&!link_code[0])create_device_link();}else{s->settings[s->row]^=1;save_state(s);}}
+    if((pressed&ORBIS_PAD_BUTTON_CROSS)&&s->page==4){if(s->row==4){s->account=1;if(!auth_key[0]&&!link_code[0])create_device_link();}else{s->settings[s->row]^=1;save_state(s);show_toast(s->settings[s->row]?"Setting enabled":"Setting disabled");}}
     else if((pressed&ORBIS_PAD_BUTTON_CROSS)&&catalog_status==2&&s->page<3){
         int index=s->page==0?s->row*5+s->column:s->page==2?saved_index(s->column):s->column+(s->page==1&&s->discover_series?5:0);
         if(index>=0&&index<15&&live_cards[index].name[0]){s->detail_index=index;load_metadata(&live_cards[index]);s->detail=1;}
@@ -620,7 +635,7 @@ int main(void){
     const int pad=open_pad();if(pad<0)park_error("scePadOpen",pad);
     int active_buffer=1;int64_t flip_id=3;uint32_t previous_buttons=0;
     for(;;){OrbisPadData input={0};if(scePadReadState(pad,&input)==0){uint32_t pressed=input.buttons&~previous_buttons;previous_buttons=input.buttons;
-        int changed=route_input(&state,pressed);if(changed<0){scePadClose(pad);sceSystemServiceLoadExec("exit",0);}
-        if(changed>0){active_buffer^=1;draw_screen(buffers[active_buffer],&state);sceVideoOutSubmitFlip(video,active_buffer,ORBIS_VIDEO_OUT_FLIP_VSYNC,flip_id++);}}
+        int changed=route_input(&state,pressed);if(changed<0){scePadClose(pad);sceSystemServiceLoadExec("exit",0);}if(changed>0)animation_frames=14;
+        if(changed>0||animation_frames>0||toast_frames>0){if(animation_frames>0)--animation_frames;if(toast_frames>0)--toast_frames;++ui_phase;active_buffer^=1;draw_screen(buffers[active_buffer],&state);sceVideoOutSubmitFlip(video,active_buffer,ORBIS_VIDEO_OUT_FLIP_VSYNC,flip_id++);}}
         sceKernelUsleep(16000);}
 }

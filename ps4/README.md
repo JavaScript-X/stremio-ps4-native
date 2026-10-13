@@ -108,6 +108,10 @@ Version 0.25 adds a native series episode browser backed by live Cinemeta video
 metadata. Series now open season and episode selection before streams, support
 L1/R1 season switching and scrolling D-pad navigation, and resolve addons with
 the selected episode's full Stremio video id.
+Version 0.26 ports more of the PS5 presentation layer: live background and logo
+artwork on title flows, animated focus-card lift and colour pulses, ambient
+backdrop motion, multi-frame rendering after interaction, and toast feedback for
+saved titles, settings, addons, account actions, and catalog refreshes.
 
 The output is `dist-ps4/IV0000-BREW00991_00-STREMIOPS4000000.pkg`.
 The current package is a native 1080p VideoOut application using DualShock 4

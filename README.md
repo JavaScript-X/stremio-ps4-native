@@ -33,6 +33,9 @@ filter, account, and stream-source visual states.
 Version 0.25 adds the complete native series-selection path: live Cinemeta
 season/episode parsing, a PS5-style episode list, L1/R1 season switching,
 scrolling episode navigation, and episode-specific addon stream resolution.
+Version 0.26 adds live Cinemeta background and title-logo artwork, animated card
+focus and ambient violet lighting, multi-frame UI redraws, and PS5-style toast
+feedback for library, settings, addons, account linking, and catalog refreshes.
 
 The upstream PS5 documentation is retained below while features are moved to
 the PS4 platform layer. PS5 installation instructions and artifacts do not
