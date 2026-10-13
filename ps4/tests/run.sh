@@ -8,3 +8,5 @@ clang-18 -std=c11 -O1 -g -fsanitize=address,undefined -I. videoout/video_convert
 build/tests/video_test
 clang-18 -std=c11 -O1 -g -fsanitize=address,undefined -Itests/mocks -I. videoout/playback.c videoout/video_convert.c tests/playback_test.c -pthread -o build/tests/playback_test
 build/tests/playback_test
+clang++-18 -std=c++17 -O1 -g -fsanitize=address,undefined -I../src tests/torrent_crypto_test.cpp -o build/tests/torrent_crypto_test
+build/tests/torrent_crypto_test

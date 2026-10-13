@@ -75,11 +75,12 @@ void playback_close(void){
     __atomic_store_n(&audio_running,0,__ATOMIC_RELEASE);if(audio_started){pthread_join(audio_thread,0);audio_started=0;}
     pthread_mutex_lock(&api_mutex);if(player){api.stop(player);api.close(player);player=0;}status.open=0;pthread_mutex_unlock(&api_mutex);
 }
-int playback_open(const char *url,int http,int ssl){
+static int playback_open_impl(const char *url,const PlaybackFile *file,int http,int ssl){
     playback_close();memset(&status,0,sizeof(status));resume_ms=0;__atomic_store_n(&event_state,0,__ATOMIC_RELEASE);
-    if(!url||((strncmp(url,"https://",8)&&strncmp(url,"http://",7))&&strncmp(url,"/data/",6))){fail("Unsupported media URL",-1);return 0;}
+    if(!url||(!file&&((strncmp(url,"https://",8)&&strncmp(url,"http://",7))&&strncmp(url,"/data/",6)))){fail("Unsupported media URL",-1);return 0;}
     if(!load_api())return 0;
     Ps4AvInit init={0};init.memory=(Ps4AvMemory){0,mem_alloc,mem_free,texture_alloc,texture_free};init.events.callback=on_event;
+    if(file)init.file=(Ps4AvFile){file->object,file->open,file->close,file->read,file->size};
     init.priority=0x2bc;init.buffers=4;init.auto_start=true;init.language="eng";
     player=api.init(&init);if(!player){fail("AVPlayer initialization failed",-1);return 0;}
     Ps4AvPost post={0};post.http=(uint32_t)http;post.ssl=(uint32_t)ssl;
@@ -88,6 +89,8 @@ int playback_open(const char *url,int http,int ssl){
     status.open=1;status.buffering=1;started_ms=now_ms();__atomic_store_n(&audio_running,1,__ATOMIC_RELEASE);
     r=pthread_create(&audio_thread,0,audio_loop,0);if(r){fail("Audio thread failed",r);playback_close();return 0;}audio_started=1;return 1;
 }
+int playback_open(const char *url,int http,int ssl){return playback_open_impl(url,0,http,ssl);}
+int playback_open_file(const char *name,const PlaybackFile *file,int http,int ssl){return file&&file->read&&file->size?playback_open_impl(name,file,http,ssl):0;}
 void playback_toggle_pause(void){pthread_mutex_lock(&api_mutex);if(player){int r=status.paused?api.resume(player):api.pause(player);if(r>=0)status.paused=!status.paused;else fail("Pause failed",r);}pthread_mutex_unlock(&api_mutex);}
 void playback_seek(int seconds){pthread_mutex_lock(&api_mutex);if(player){int64_t target=(int64_t)api.time(player)+(int64_t)seconds*1000;if(target<0)target=0;if(status.duration_ms&&(uint64_t)target>=status.duration_ms)target=status.duration_ms-1;int r=api.seek(player,(uint64_t)target);if(r<0)fail("Seek unavailable",r);}pthread_mutex_unlock(&api_mutex);}
 void playback_resume_at(uint64_t milliseconds){resume_ms=milliseconds;}

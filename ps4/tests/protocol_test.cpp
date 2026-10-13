@@ -20,9 +20,10 @@ int main(){
     assert(!std::strcmp(url,"https://example.org/key/stream/series/tt123%3A1%3A2.json"));
     assert(!pj_resource(d,"https://example.org/manifest.json","stream","movie","tt123",url,sizeof(url)));
     assert(!pj_resource(d,"https://example.org/manifest.json","stream","series","other",url,sizeof(url)));pj_free(d);
-    pj_stream_reset();assert(pj_streams(R"({"streams":[{"url":"https://example.org/media.mp4","name":"Direct"},{"infoHash":"ABCDEF","fileIdx":7},{"ytId":"unsupported"}]})","Test")==2);
+    pj_stream_reset();assert(pj_streams(R"({"streams":[{"url":"https://example.org/media.mp4","name":"Direct"},{"infoHash":"ABCDEF","fileIdx":7,"sources":["tracker:udp://tracker.example:80/announce","dht:abcdef"]},{"ytId":"unsupported"}]})","Test")==2);
     assert(!std::strcmp(pj_stream_field(0,2),"https://example.org/media.mp4"));assert(pj_stream_file(0)==-1);
     assert(!std::strcmp(pj_stream_field(1,3),"abcdef")&&pj_stream_file(1)==7);
+    assert(pj_stream_source_count(1)==2&&!std::strcmp(pj_stream_source(1,0),"tracker:udp://tracker.example:80/announce"));
     assert(pj_streams("{broken","Test")==-1);assert(!std::strcmp(pj_stream_field(0,0),"Direct"));
     assert(pj_streams(R"({"error":"offline"})","Test")==-1);
     pj_stream_reset();assert(!*pj_stream_field(0,2));

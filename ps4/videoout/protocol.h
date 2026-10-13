@@ -24,6 +24,8 @@ int pj_streams(const char *text,const char *addon);
 const char *pj_stream_field(int index,int field);
 int pj_stream_file(int index);
 int pj_stream_needs_headers(int index);
+int pj_stream_source_count(int index);
+const char *pj_stream_source(int index,int source);
 void pj_stream_reset(void);
 void pj_subtitle_reset(void);
 int pj_subtitles(const char *text,const char *addon);

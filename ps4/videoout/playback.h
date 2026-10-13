@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include <stdint.h>
 #include <stddef.h>
 typedef struct {
     int open,paused,buffering,has_video,ended,error,audio_error,audio_tracks,audio_track;
@@ -8,6 +9,8 @@ typedef struct {
     char audio_language[8];
 } PlaybackStatus;
 int playback_open(const char *url,int http,int ssl);
+typedef struct {void *object;int (*open)(void *,const char *);int (*close)(void *);int (*read)(void *,uint8_t *,uint64_t,uint32_t);uint64_t (*size)(void *);} PlaybackFile;
+int playback_open_file(const char *name,const PlaybackFile *file,int http,int ssl);
 void playback_close(void);
 void playback_toggle_pause(void);
 void playback_seek(int seconds);

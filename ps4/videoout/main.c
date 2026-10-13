@@ -21,6 +21,7 @@
 #include <pthread.h>
 #include "protocol.h"
 #include "playback.h"
+#include "torrent_backend.h"
 #define STBI_ONLY_PNG
 #define STBI_ONLY_JPEG
 #define STBI_NO_HDR
@@ -54,9 +55,10 @@ typedef struct CatalogCard {
     char description[640], poster_url[384]; Image poster; int saved, metadata_loaded,poster_attempted;
 } CatalogCard;
 static CatalogCard live_cards[CARD_CAPACITY];
-typedef struct StreamSource {char name[128],title[512],info_hash[64],url[4096],addon[128];int file_index,needs_headers;} StreamSource;
+typedef struct StreamSource {char name[128],title[512],info_hash[64],url[4096],addon[128],trackers[24][256];int file_index,needs_headers,tracker_count;} StreamSource;
 static StreamSource stream_sources[128];static int stream_count,stream_status;
 static int subtitle_count,subtitle_selected=-1;static char subtitle_label[128];
+static int torrent_playing;
 typedef struct Episode {char id[128],name[128],description[256];int season,number;} Episode;
 static Episode episodes[2048];static int episode_count,max_season;static char episode_series_id[128],selected_video_id[128];
 static int catalog_count;
@@ -387,6 +389,7 @@ static void load_stream_sources(CatalogCard *card){
         snprintf(dst->title,sizeof(dst->title),"%s",pj_stream_field(i,1));
         snprintf(dst->url,sizeof(dst->url),"%s",direct);snprintf(dst->info_hash,sizeof(dst->info_hash),"%s",hash);
         snprintf(dst->addon,sizeof(dst->addon),"%s",pj_stream_field(i,4));dst->file_index=pj_stream_file(i);dst->needs_headers=pj_stream_needs_headers(i);
+        for(int j=0;j<pj_stream_source_count(i)&&dst->tracker_count<24;++j){const char *src=pj_stream_source(i,j);if(!strncmp(src,"tracker:",8))src+=8;if(!strncmp(src,"udp://",6)||!strncmp(src,"http://",7)||!strncmp(src,"https://",8))snprintf(dst->trackers[dst->tracker_count++],256,"%s",src);}
     }
     for(int i=0;i<64&&*pj_subtitle_field(i,0);++i)++subtitle_count;
     stream_status=stream_count?2:!stream_queried?4:stream_failures?5:3;
@@ -704,6 +707,7 @@ static void draw_player(void *b){
         draw_round_rect(b,90,980,1740,8,4,SURFACE_HI);if(played>0)draw_round_rect(b,90,980,played,8,4,ACCENT_SOFT);
         int x=90;x=draw_prompt(b,&cross_icon,p.paused?"PLAY":"PAUSE",x,1020);x=draw_prompt(b,&dpad_icon,"10 SEC",x,1020);x=draw_prompt(b,&square_icon,subtitle_count?"SUBTITLES":"NO SUBS",x,1020);x=draw_prompt(b,&triangle_icon,p.audio_tracks>1?"AUDIO":"AUDIO",x,1020);x=draw_prompt(b,&l1_icon,"-1 MIN",x,1020);x=draw_prompt(b,&r1_icon,"+1 MIN",x,1020);draw_prompt(b,&circle_icon,"STOP",x,1020);
         if(subtitle_selected>=0&&subtitle_label[0])draw_text(b,1450,55,subtitle_label,2,INK_2);if(p.audio_tracks>1&&p.audio_language[0])draw_text(b,1250,55,p.audio_language,2,INK_2);
+        if(torrent_playing){char stats[128]={0};if(torrent_stats(stats,sizeof(stats)))draw_text(b,900,920,stats,3,INK_2);}
         if(p.error||p.buffering){draw_round_rect(b,310,440,1300,150,30,SURFACE);draw_text(b,360,485,p.error?p.message:"Opening stream...",4,p.error?ACCENT_SOFT:INK);}
         if(p.audio_error)draw_text(b,900,55,"Audio format/output unavailable",3,ACCENT_SOFT);
     }
@@ -735,11 +739,11 @@ static void save_playback_progress(const AppState *s){
 static int start_stream_source(AppState *s,int index){
     if(index<0||index>=stream_count)return 0;StreamSource *source=&stream_sources[index];
     if(source->needs_headers){show_toast("This source requires HTTP header support");return 0;}
-    if(!source->url[0]){show_toast("Torrent backend still requires porting");return 0;}
     if(!video_canvas)video_canvas=malloc((size_t)WIDTH*HEIGHT*4);if(!video_canvas){show_toast("Not enough memory for video");return 0;}
     fill_buffer(video_canvas,0xff000000u);
     if(s->settings[1]&&subtitle_count&&!load_subtitle_track(0))show_toast("Subtitle download failed");else if(!s->settings[1])load_subtitle_track(-1);
-    playback_open(source->url,http_context,ssl_context);CatalogCard *card=&live_cards[s->detail_index];const char *video=selected_video_id[0]?selected_video_id:card->id;
+    int opened=0;torrent_playing=0;if(source->url[0])opened=playback_open(source->url,http_context,ssl_context);else {const char *trackers[24];for(int i=0;i<source->tracker_count;++i)trackers[i]=source->trackers[i];int season=0,episode=0;for(int i=0;i<episode_count;++i)if(!strcmp(episodes[i].id,selected_video_id)){season=episodes[i].season;episode=episodes[i].number;break;}PlaybackFile file={0};char filename[256]={0};show_toast("Finding torrent peers and metadata...");if(torrent_prepare(source->info_hash,trackers,source->tracker_count,source->file_index,season,episode,&file,filename,sizeof(filename)))opened=playback_open_file(filename[0]?filename:"torrent.media",&file,http_context,ssl_context);if(!opened){torrent_stop();show_toast("Torrent metadata or peers unavailable");return 0;}torrent_playing=1;}
+    if(!opened)return 0;CatalogCard *card=&live_cards[s->detail_index];const char *video=selected_video_id[0]?selected_video_id:card->id;
     playback_resume_at((uint64_t)(pj_progress_resume(card->id,video)*1000));progress_saved_ms=0;s->playing=1;playback_controls=180;return 1;
 }
 static int autoplay_next_episode(AppState *s){
@@ -753,7 +757,7 @@ static int autoplay_next_episode(AppState *s){
 static int route_input(AppState *s,uint32_t pressed){
     if(s->playing){
         if(pressed)playback_controls=180;
-        if(pressed&ORBIS_PAD_BUTTON_CIRCLE){save_playback_progress(s);playback_close();s->playing=0;return 1;}
+        if(pressed&ORBIS_PAD_BUTTON_CIRCLE){save_playback_progress(s);playback_close();torrent_playing=0;s->playing=0;return 1;}
         if(pressed&ORBIS_PAD_BUTTON_CROSS)playback_toggle_pause();
         if(pressed&ORBIS_PAD_BUTTON_LEFT)playback_seek(-10);
         if(pressed&ORBIS_PAD_BUTTON_RIGHT)playback_seek(10);
@@ -896,7 +900,7 @@ int main(void){
         if(scePadReadState(pad,&input)==0){pressed=input.buttons&~previous_buttons;previous_buttons=input.buttons;}
         int changed=0,new_video=0,toast_expired=0,busy_frame=0;
         if(job.active){
-            if(pressed&ORBIS_PAD_BUTTON_CIRCLE)__atomic_store_n(&network_cancel,1,__ATOMIC_RELEASE);
+            if(pressed&ORBIS_PAD_BUTTON_CIRCLE){__atomic_store_n(&network_cancel,1,__ATOMIC_RELEASE);torrent_cancel();}
             if(__atomic_load_n(&job.done,__ATOMIC_ACQUIRE)){
                 pthread_join(job.thread,0);state=job.state;changed=job.result;job.active=0;busy_ticks=0;
                 if(__atomic_load_n(&network_cancel,__ATOMIC_ACQUIRE)){show_toast("Request cancelled");changed=1;}
@@ -911,7 +915,7 @@ int main(void){
             if(state.playing){
                 new_video=playback_video(video_canvas,WIDTH,HEIGHT);PlaybackStatus ps=playback_status();
                 if(ps.position_ms>progress_saved_ms+10000)save_playback_progress(&state);
-                if(ps.ended){save_playback_progress(&state);playback_close();state.playing=0;changed=1;
+                if(ps.ended){save_playback_progress(&state);playback_close();torrent_playing=0;state.playing=0;changed=1;
                     if(state.settings[2]&&selected_video_id[0]&&begin_job(&state,0,2))show_toast("Loading next episode");else show_toast("Playback finished");}
                 if(playback_controls)--playback_controls;
             }

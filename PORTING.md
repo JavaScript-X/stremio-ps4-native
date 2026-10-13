@@ -68,7 +68,7 @@ a frame in that environment, so the PS4 renderer will use VideoOut (or an
 OpenGNM backend built on it), not Piglet. The existing PS5 HUI renderer is not
 connected to this backend yet.
 
-## Current integration checkpoint (0.31)
+## Current integration checkpoint (0.33)
 
 The PS4 build now compiles the upstream `src/stremio.cpp` addon and stream
 model behind a small C boundary. Direct links enter an on-demand AVPlayer
@@ -77,11 +77,17 @@ host-side sanitizer tests. Network operations run outside the render loop and
 Library records persist independently of the current catalog.
 
 No unchecked matrix row is considered passed by compilation alone. Direct
-media needs codec/container testing on both PS4 models. Torrent, FFmpeg fallback,
-subtitle, audio-track, IME, sound and suspend integrations still need PS4
-platform implementations.
+media needs codec/container testing on both PS4 models. FFmpeg fallback, IME,
+sound and suspend integrations still need PS4 platform implementations.
 
 The 0.32 follow-up connects external addon subtitles, the shared PS5 subtitle
 parsers, AVPlayer audio-stream selection and next-episode autoplay. Subtitle
 format parsing is sanitizer-tested; full Unicode shaping/font coverage and the
 new controls still require hardware acceptance.
+
+The 0.33 follow-up compiles the upstream torrent peer engine for PS4 and joins
+it to AVPlayer's seekable replacement-file callbacks. UDP trackers, BEP 9
+metadata, PEX, rolling cache and SHA-1 piece verification are implemented and
+host/build tested. The matrix remains unchecked until cold start, playback,
+seek, cancellation and cache recovery pass on real PS4 hardware. DHT, HTTP
+tracker announces and UPnP are not enabled in the PS4 build yet.

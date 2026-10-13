@@ -60,6 +60,8 @@ const char *pj_stream_field(int i,int field){if(i<0||size_t(i)>=streams.size())r
     switch(field){case 0:return s.name.c_str();case 1:return s.description.c_str();case 2:return s.url.c_str();case 3:return s.info_hash.c_str();case 4:return s.addon.c_str();default:return "";}}
 int pj_stream_file(int i){return i>=0&&size_t(i)<streams.size()?streams[size_t(i)].file_idx:-1;}
 int pj_stream_needs_headers(int i){return i>=0&&size_t(i)<streams.size()&&!streams[size_t(i)].request_headers.empty();}
+int pj_stream_source_count(int i){return i>=0&&size_t(i)<streams.size()?int(streams[size_t(i)].sources.size()):0;}
+const char *pj_stream_source(int i,int source){if(i<0||size_t(i)>=streams.size())return "";auto &v=streams[size_t(i)].sources;return source>=0&&size_t(source)<v.size()?v[size_t(source)].c_str():"";}
 void pj_subtitle_reset(void){subtitles.clear();cues.clear();}
 int pj_subtitles(const char *text,const char *addon){try{
     auto j=json::parse(text,nullptr,false);if(j.is_discarded()||!j.is_object()||!j.contains("subtitles")||!j["subtitles"].is_array())return -1;

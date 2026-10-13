@@ -156,6 +156,15 @@ writes remain separate platform work.
 The Library's All, Movies and Series controls now filter both counts and paged
 card navigation; Square changes the active filter.
 
+Version 0.33 ports the upstream BitTorrent engine without a proxy server.
+Addon tracker sources, fallback UDP trackers, BEP 9 metadata exchange, PEX,
+piece SHA-1 verification, episode-aware file selection and a bounded 768 MiB
+rolling cache feed PS4 AVPlayer through its random-access file callbacks.
+Native seeking, subtitles, alternate audio, resume and autoplay therefore work
+through the same player path. The player overlay reports peers, download rate
+and selected-file progress. HTTP tracker announces and DHT remain follow-up
+PS4 networking work; UDP trackers plus peer exchange are active in this build.
+
 The output is `dist-ps4/IV0000-BREW00991_00-STREMIOPS4000000.pkg`.
 The current package is a native 1080p VideoOut application using DualShock 4
 navigation and PS4 networking. Firmware 13.02 with GoldHEN 2.4b18.12 is the
@@ -181,10 +190,10 @@ before the app can be called installable or feature complete:
 | GPU/UI | PS5 OpenGL over AGC | Piglet/OpenGL ES or OpenGNM | EGL bring-up implementation |
 | Input | DualSense `libScePad` | DualShock 4 `libScePad` | bring-up implementation |
 | Keyboard | PS5 IME dialog | PS4 IME dialog | pending |
-| Audio | PS5 `libSceAudioOut` | PS4 `libSceAudioOut` | pending |
-| Video | `libSceVideodec2` | `libSceAvPlayer`/PS4 decoder | pending |
-| Network | PS5 resolver/curl shims | PS4 Net/HTTP/curl port | pending |
-| Storage | `/download0/stremio` | `/data/...` or save-data mount | pending |
+| Audio | PS5 `libSceAudioOut` | PS4 `libSceAudioOut` | implemented; hardware acceptance ongoing |
+| Video | `libSceVideodec2` | `libSceAvPlayer`/PS4 decoder | implemented; hardware acceptance ongoing |
+| Network | PS5 resolver/curl shims | PS4 Net/HTTP + native sockets | implemented; DHT/HTTP tracker follow-up |
+| Storage | `/download0/stremio` | `/data/...` | implemented; cache-recovery acceptance pending |
 | QA | PS5 hardware | PS4 + PS4 Pro hardware | pending |
 
 See [`PORTING.md`](../PORTING.md) for the implementation gates and acceptance

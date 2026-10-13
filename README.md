@@ -62,6 +62,14 @@ audio-track discovery/switching, and automatic resolution and launch of the
 next series episode. These features retain the asynchronous networking and
 stable VideoOut renderer validated in 0.31. Library Movies/Series filters are
 now functional rather than decorative.
+Version 0.33 ports the PS5 built-in BitTorrent engine into the native PS4
+player path. Magnet/info-hash sources now use addon and fallback UDP trackers,
+BEP 9 peer metadata, PEX, piece verification and a bounded 768 MiB rolling
+cache. AVPlayer consumes the selected movie or episode through its seekable
+file callback ABI, so the existing hardware decoder, seeking, subtitles,
+audio-track switching, resume and autoplay paths are shared by direct and
+torrent sources. Peer count, transfer rate and buffered-file progress appear
+in the player overlay. This backend requires real-console swarm testing.
 
 The upstream PS5 documentation is retained below while features are moved to
 the PS4 platform layer. PS5 installation instructions and artifacts do not

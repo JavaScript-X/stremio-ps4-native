@@ -13,8 +13,12 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#ifdef PLATFORM_PS4
+#include "crypto_compat.h"
+#else
 #include <openssl/rand.h>
 #include <openssl/sha.h>
+#endif
 
 #include <algorithm>
 #include <condition_variable>
@@ -1562,6 +1566,10 @@ bool wait_stoppable(Torrent* t, double seconds) {
 int64_t bytes_left(Torrent* t) { return t->has_meta ? t->total : 1ll << 30; }
 
 bool announce_http(Torrent* t, const std::string& url, bool first, std::vector<sockaddr_in>& peers, int* interval) {
+#ifdef PLATFORM_PS4
+	(void)t; (void)url; (void)first; (void)peers; (void)interval;
+	return false;  // UDP trackers and PEX remain active; sceHttp is not thread-compatible with src/http.cpp.
+#else
 	std::string u = url + (url.find('?') == std::string::npos ? "?" : "&");
 	u += "info_hash=" + pct_encode(std::string(reinterpret_cast<const char*>(t->ih), 20));
 	u += "&peer_id=" + pct_encode(impl().peer_id);
@@ -1587,6 +1595,7 @@ bool announce_http(Torrent* t, const std::string& url, bool first, std::vector<s
 	}
 	*interval = int(d.get_int("interval", 0));
 	return true;
+#endif
 }
 
 bool udp_exchange(Torrent* t, int fd, const std::string& req, std::string& resp, uint32_t tid) {
