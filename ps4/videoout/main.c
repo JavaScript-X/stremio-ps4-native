@@ -17,6 +17,10 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#include <sys/stat.h>
+#include <pthread.h>
+#include "protocol.h"
+#include "playback.h"
 #define STBI_ONLY_PNG
 #define STBI_ONLY_JPEG
 #define STBI_NO_HDR
@@ -27,53 +31,80 @@
 #include "third_party/hui/third_party/stb/stb_truetype.h"
 
 uint64_t sceLibcHeapSize = 64 * 1024 * 1024;
-enum { WIDTH = 1920, HEIGHT = 1080, BUFFER_COUNT = 2, PAGE_COUNT = 5, CARD_CAPACITY = 40, CLOUD_CARD_START = 15 };
+enum { WIDTH = 1920, HEIGHT = 1080, BUFFER_COUNT = 2, PAGE_COUNT = 5, CARD_CAPACITY = 527, CLOUD_CARD_START = 15 };
 static const uint32_t GROUND=0xff110b0cu, SURFACE=0xff292328u, SURFACE_HI=0xff3a333du;
 static const uint32_t ACCENT=0xfff55b7bu, ACCENT_SOFT=0xffff8ba5u;
 static const uint32_t INK=0xfff7f7f7u, INK_2=0xffc8c8c8u, INK_3=0xff8f8f8fu;
 typedef struct Image { unsigned char *pixels; int width, height; } Image;
 typedef struct AppState {
     int page, rail_focus, row, column, search, detail, streams, episodes, detail_index;
-    int keyboard, search_cursor, result_focus, discover_series, account, stream_cursor, episode_cursor, season, library_page; char query[24]; int settings[5];
+    int keyboard, search_cursor, result_focus, discover_series, account, stream_cursor, episode_cursor, season, library_page, playing; char query[24]; int settings[5];
 } AppState;
 static const char *PAGE_NAMES[PAGE_COUNT]={"Board","Discover","Library","Addons","Settings"};
 static const char *ICON_NAMES[PAGE_COUNT]={"nav_board","nav_discover","nav_library","nav_addons","nav_settings"};
 static Image logo, wordmark, search_icon, cross_icon, circle_icon, triangle_icon, square_icon, options_icon;
 static Image dpad_icon, l1_icon, r1_icon, play_icon, play_small_icon, pause_icon, check_icon, check_small_icon;
-static Image chevron_icon, chevron_down_icon, logo_large, nav_line[PAGE_COUNT], nav_solid[PAGE_COUNT];static char hero_id[24];
+static Image chevron_icon, chevron_down_icon, logo_large, nav_line[PAGE_COUNT], nav_solid[PAGE_COUNT];static char hero_id[128];
 static Image hero_background, hero_logo;static int animation_frames;static unsigned ui_phase;static char toast_text[96];static int toast_frames;
+static uint32_t *video_canvas;static uint64_t progress_saved_ms;static unsigned playback_controls=180;
 static float measured_fps,measured_frame_ms;static uint64_t last_flip_ns;
 static unsigned char *font_atlas;static stbtt_bakedchar font_chars[96];static int font_ready;
 typedef struct CatalogCard {
-    char id[24], name[40], type[12], year[16], runtime[24], rating[12], genres[96];
-    char description[640], poster_url[384]; Image poster; int saved, metadata_loaded;
+    char id[128], name[128], type[24], year[16], runtime[24], rating[12], genres[96];
+    char description[640], poster_url[384]; Image poster; int saved, metadata_loaded,poster_attempted;
 } CatalogCard;
 static CatalogCard live_cards[CARD_CAPACITY];
-typedef struct StreamSource {char name[32],title[96],info_hash[64];int file_index;} StreamSource;
-static StreamSource stream_sources[8];static int stream_count,stream_status;
-typedef struct Episode {char id[40],name[64],description[256];int season,number;} Episode;
-static Episode episodes[80];static int episode_count,max_season;static char episode_series_id[24],selected_video_id[40];
+typedef struct StreamSource {char name[128],title[512],info_hash[64],url[4096],addon[128];int file_index,needs_headers;} StreamSource;
+static StreamSource stream_sources[128];static int stream_count,stream_status;
+typedef struct Episode {char id[128],name[128],description[256];int season,number;} Episode;
+static Episode episodes[2048];static int episode_count,max_season;static char episode_series_id[128],selected_video_id[128];
 static int catalog_count;
 static int search_count, search_status;
-static char saved_ids[CARD_CAPACITY][24];static int saved_id_count,cloud_card_count;
+static char saved_ids[CARD_CAPACITY][128];static int saved_id_count,cloud_card_count;
 static int catalog_status;
+static int library_order[CARD_CAPACITY],library_count;
 static int poster_count;
 static int net_pool, ssl_context, http_context;
 static char auth_key[256], link_code[16], link_url[128];
 static int account_status, public_domain_enabled=1, public_domain_online;
 static int account_sync_status,account_addon_count;
+static PJson addon_document;
+static int stream_failures,stream_queried,library_truncated;
+static int network_cancel;
+static void load_card_poster(CatalogCard *card);
+static int saved_index(int slot);
+static void save_library_cache(void);
 
 static int id_saved(const char *id){for(int i=0;i<saved_id_count;++i)if(!strcmp(saved_ids[i],id))return 1;return 0;}
-static void apply_saved(void){for(int i=0;i<CARD_CAPACITY;++i)if(live_cards[i].id[0])live_cards[i].saved=id_saved(live_cards[i].id);}
+static void apply_saved(void){
+    for(int i=0;i<CARD_CAPACITY;++i)if(live_cards[i].id[0])live_cards[i].saved=id_saved(live_cards[i].id);
+    library_count=0;
+    for(int j=0;j<saved_id_count;++j)for(int i=0;i<CARD_CAPACITY;++i)
+        if(live_cards[i].name[0]&&!strcmp(live_cards[i].id,saved_ids[j])){
+            int duplicate=0;for(int k=0;k<library_count;++k)if(library_order[k]==i)duplicate=1;
+            if(!duplicate)library_order[library_count++]=i;break;
+        }
+}
 static void load_state(AppState *s){
-    FILE *f=fopen("/data/stremio-ps4.cfg","r");if(!f)return;char line[128];
+    FILE *f=fopen("/data/stremio-ps4.cfg","r");if(!f)return;char line[256];
     if(fgets(line,sizeof(line),f))sscanf(line,"%d %d %d %d %d",&s->settings[0],&s->settings[1],&s->settings[2],&s->settings[3],&s->settings[4]);
-    while(saved_id_count<CARD_CAPACITY&&fgets(line,sizeof(line),f)){line[strcspn(line,"\r\n")]=0;if(line[0])strncpy(saved_ids[saved_id_count++],line,23);}fclose(f);
+    while(saved_id_count<CARD_CAPACITY&&fgets(line,sizeof(line),f)){line[strcspn(line,"\r\n")]=0;if(line[0])strncpy(saved_ids[saved_id_count++],line,sizeof(saved_ids[0])-1);}fclose(f);
 }
 static void save_state(const AppState *s){
-    saved_id_count=0;for(int i=0;i<CARD_CAPACITY&&saved_id_count<CARD_CAPACITY;++i)if(live_cards[i].saved&&live_cards[i].id[0])strncpy(saved_ids[saved_id_count++],live_cards[i].id,23);
-    FILE *f=fopen("/data/stremio-ps4.cfg","w");if(!f)return;fprintf(f,"%d %d %d %d %d\n",s->settings[0],s->settings[1],s->settings[2],s->settings[3],s->settings[4]);
-    for(int i=0;i<saved_id_count;++i)fprintf(f,"%s\n",saved_ids[i]);fclose(f);
+    /* Keep IDs absent from the current catalog. Only explicit save/remove changes them. */
+    FILE *f=fopen("/data/stremio-ps4.cfg.tmp","w");if(!f)return;
+    fprintf(f,"%d %d %d %d %d\n",s->settings[0],s->settings[1],s->settings[2],s->settings[3],s->settings[4]);
+    for(int i=0;i<saved_id_count;++i)fprintf(f,"%s\n",saved_ids[i]);
+    int failed=ferror(f);if(fclose(f)!=0)failed=1;
+    if(!failed)rename("/data/stremio-ps4.cfg.tmp","/data/stremio-ps4.cfg");
+    save_library_cache();
+}
+static void toggle_saved(CatalogCard *card){
+    for(int i=0;i<saved_id_count;++i)if(!strcmp(saved_ids[i],card->id)){
+        memmove(saved_ids[i],saved_ids[i+1],(size_t)(saved_id_count-i-1)*sizeof(saved_ids[0]));
+        --saved_id_count;apply_saved();return;
+    }
+    if(saved_id_count<CARD_CAPACITY){snprintf(saved_ids[saved_id_count++],sizeof(saved_ids[0]),"%s",card->id);apply_saved();}
 }
 static void load_account(void){
     FILE *f=fopen("/data/stremio-ps4-auth.cfg","r");if(!f)return;char line[320];
@@ -83,7 +114,7 @@ static void load_account(void){
 }
 static void save_account(void){
     FILE *f=fopen("/data/stremio-ps4-auth.cfg","w");if(!f)return;
-    fprintf(f,"auth=%s\npublic_domain=%d\n",auth_key,public_domain_enabled);fclose(f);
+    fprintf(f,"auth=%s\npublic_domain=%d\n",auth_key,public_domain_enabled);fclose(f);chmod("/data/stremio-ps4-auth.cfg",0600);
 }
 
 static int network_init(void){
@@ -98,8 +129,8 @@ static int network_init(void){
 }
 
 static unsigned char *http_get(const char *url,size_t limit,size_t *received){
-    *received=0;int tpl=0,conn=0,req=0,status=0;unsigned char *body=0;size_t used=0,capacity=0;
-    tpl=sceHttpCreateTemplate(http_context,"Stremio-PS4/0.10",ORBIS_HTTP_VERSION_1_1,1);if(tpl<0)goto done;
+    *received=0;if(__atomic_load_n(&network_cancel,__ATOMIC_ACQUIRE))return 0;int tpl=0,conn=0,req=0,status=0;unsigned char *body=0;size_t used=0,capacity=0;
+    tpl=sceHttpCreateTemplate(http_context,"Stremio-PS4/0.31",ORBIS_HTTP_VERSION_1_1,1);if(tpl<0)goto done;
     sceHttpSetResolveTimeOut(tpl,5000000);sceHttpSetConnectTimeOut(tpl,5000000);sceHttpSetRecvTimeOut(tpl,7000000);
     conn=sceHttpCreateConnectionWithURL(tpl,url,1);if(conn<0)goto done;
     req=sceHttpCreateRequestWithURL(conn,ORBIS_METHOD_GET,url,0);if(req<0)goto done;
@@ -109,19 +140,19 @@ static unsigned char *http_get(const char *url,size_t limit,size_t *received){
     for(;;){
         if(used==capacity){size_t next=capacity*2;if(next>limit)next=limit;if(next<=capacity)goto failed;
             unsigned char *grown=(unsigned char*)realloc(body,next+1);if(!grown)goto failed;body=grown;capacity=next;}
-        int got=sceHttpReadData(req,body+used,(uint32_t)(capacity-used));if(got<0)goto failed;if(got==0)break;used+=(size_t)got;
+        if(__atomic_load_n(&network_cancel,__ATOMIC_ACQUIRE))goto failed;int got=sceHttpReadData(req,body+used,(uint32_t)(capacity-used));if(got<0)goto failed;if(got==0)break;used+=(size_t)got;
     }
     body[used]=0;*received=used;goto done;
 failed:
     free(body);body=0;used=0;
 done:
     if(req>0)sceHttpDeleteRequest(req);if(conn>0)sceHttpDeleteConnection(conn);if(tpl>0)sceHttpDeleteTemplate(tpl);
-    sceKernelDebugOutText(0,"[stremio-ps4] GET %s status=%d bytes=%lu\n",url,status,(unsigned long)used);return body;
+    sceKernelDebugOutText(0,"[stremio-ps4] GET status=%d bytes=%lu\n",status,(unsigned long)used);return body;
 }
 
 static unsigned char *http_post_json(const char *url,const char *payload,size_t limit,size_t *received){
-    *received=0;int tpl=0,conn=0,req=0,status=0;unsigned char *body=0;size_t used=0,capacity=0;size_t payload_size=strlen(payload);
-    tpl=sceHttpCreateTemplate(http_context,"Stremio-PS4/0.29",ORBIS_HTTP_VERSION_1_1,1);if(tpl<0)goto done;
+    *received=0;if(__atomic_load_n(&network_cancel,__ATOMIC_ACQUIRE))return 0;int tpl=0,conn=0,req=0,status=0;unsigned char *body=0;size_t used=0,capacity=0;size_t payload_size=strlen(payload);
+    tpl=sceHttpCreateTemplate(http_context,"Stremio-PS4/0.31",ORBIS_HTTP_VERSION_1_1,1);if(tpl<0)goto done;
     sceHttpSetResolveTimeOut(tpl,5000000);sceHttpSetConnectTimeOut(tpl,5000000);sceHttpSetRecvTimeOut(tpl,10000000);
     conn=sceHttpCreateConnectionWithURL(tpl,url,1);if(conn<0)goto done;
     req=sceHttpCreateRequestWithURL(conn,ORBIS_METHOD_POST,url,payload_size);if(req<0)goto done;
@@ -129,49 +160,109 @@ static unsigned char *http_post_json(const char *url,const char *payload,size_t 
     if(sceHttpSendRequest(req,payload,payload_size)<0||sceHttpGetStatusCode(req,&status)<0||status<200||status>=300)goto done;
     capacity=64*1024;if(capacity>limit)capacity=limit;body=(unsigned char*)malloc(capacity+1);if(!body)goto done;
     for(;;){if(used==capacity){size_t next=capacity*2;if(next>limit)next=limit;if(next<=capacity)goto failed;unsigned char *grown=(unsigned char*)realloc(body,next+1);if(!grown)goto failed;body=grown;capacity=next;}
-        int got=sceHttpReadData(req,body+used,(uint32_t)(capacity-used));if(got<0)goto failed;if(!got)break;used+=(size_t)got;}
+        if(__atomic_load_n(&network_cancel,__ATOMIC_ACQUIRE))goto failed;int got=sceHttpReadData(req,body+used,(uint32_t)(capacity-used));if(got<0)goto failed;if(!got)break;used+=(size_t)got;}
     body[used]=0;*received=used;goto done;
 failed: free(body);body=0;used=0;
 done: if(req>0)sceHttpDeleteRequest(req);if(conn>0)sceHttpDeleteConnection(conn);if(tpl>0)sceHttpDeleteTemplate(tpl);
     sceKernelDebugOutText(0,"[stremio-ps4] POST %s status=%d bytes=%lu\n",url,status,(unsigned long)used);return body;
 }
 
-static const char *json_value(const char *from,const char *key,char *out,size_t out_size,int uppercase){
-    const char *p=strstr(from,key);if(!p)return 0;p+=strlen(key);size_t n=0;
-    while(*p&&*p!='\"'){if(*p=='\\'&&p[1])++p;if(n+1<out_size){char c=*p;out[n++]=uppercase&&c>='a'&&c<='z'?c-32:c;}++p;}
-    out[n]=0;return *p?p+1:0;
-}
-
 static void create_device_link(void){
     account_status=1;link_code[0]=link_url[0]=0;if(!network_init()){account_status=5;return;}size_t size=0;
-    unsigned char *json=http_get("https://link.stremio.com/api/v2/create?type=Create",128*1024,&size);
-    if(!json){account_status=5;return;}const char *p=(char*)json,*v;
-    if((v=strstr(p,"\"code\":\"")))json_value(v,"\"code\":\"",link_code,sizeof(link_code),1);
-    if((v=strstr(p,"\"link\":\"")))json_value(v,"\"link\":\"",link_url,sizeof(link_url),0);
-    free(json);account_status=link_code[0]?2:5;
+    unsigned char *raw=http_get("https://link.stremio.com/api/v2/create?type=Create",128*1024,&size);
+    PJson doc=pj_parse((char*)raw);free(raw);
+    PJson result=pj_get(doc,"result");pj_copy(pj_get(result,"code"),link_code,sizeof(link_code));pj_copy(pj_get(result,"link"),link_url,sizeof(link_url));
+    pj_free(doc);account_status=link_code[0]?2:5;
 }
 static void poll_device_link(void){
     if(!link_code[0]){create_device_link();return;}account_status=3;char url[256];
+    /* Link codes are server-issued alphanumeric identifiers, never URL syntax. */
+    for(const char *p=link_code;*p;++p)if(!((*p>='a'&&*p<='z')||(*p>='A'&&*p<='Z')||(*p>='0'&&*p<='9')||*p=='-')){account_status=5;return;}
     snprintf(url,sizeof(url),"https://link.stremio.com/api/v2/read?type=Read&code=%s",link_code);size_t size=0;
-    unsigned char *json=http_get(url,256*1024,&size);if(!json){account_status=2;return;}const char *v=strstr((char*)json,"\"authKey\":\"");
-    if(v){json_value(v,"\"authKey\":\"",auth_key,sizeof(auth_key),0);if(auth_key[0]){account_status=4;save_account();}}
-    else account_status=2;free(json);
+    unsigned char *raw=http_get(url,256*1024,&size);PJson doc=pj_parse((char*)raw);free(raw);
+    char key[sizeof(auth_key)]={0};pj_copy(pj_get(pj_get(doc,"result"),"authKey"),key,sizeof(key));pj_free(doc);
+    if(key[0]){memcpy(auth_key,key,sizeof(key));account_status=4;save_account();}else account_status=2;
+}
+static void card_from_json(CatalogCard *card,PJson item,int library){
+    pj_copy(pj_get(item,library?"_id":"id"),card->id,sizeof(card->id));
+    if(!card->id[0])pj_copy(pj_get(item,"imdb_id"),card->id,sizeof(card->id));
+    pj_copy(pj_get(item,"name"),card->name,sizeof(card->name));
+    pj_copy(pj_get(item,"type"),card->type,sizeof(card->type));
+    for(char *p=card->type;*p;++p)if(*p>='a'&&*p<='z')*p-=32;
+    pj_copy(pj_get(item,"poster"),card->poster_url,sizeof(card->poster_url));
+    pj_copy(pj_get(item,"releaseInfo"),card->year,sizeof(card->year));
+    pj_copy(pj_get(item,"description"),card->description,sizeof(card->description));
+}
+static void load_library_cache(void){
+    PJson list=pj_cache_read("/data/stremio-ps4-library.json");
+    for(int i=0;i<pj_size(list)&&cloud_card_count<CARD_CAPACITY-CLOUD_CARD_START;++i){
+        CatalogCard card={0};card_from_json(&card,pj_at(list,i),0);
+        if(card.id[0]&&card.name[0]&&id_saved(card.id))live_cards[CLOUD_CARD_START+cloud_card_count++]=card;
+    }
+    pj_free(list);apply_saved();
+}
+static void save_library_cache(void){
+    PCard cards[CARD_CAPACITY];int count=0,index;
+    while((index=saved_index(count))>=0&&count<CARD_CAPACITY){
+        CatalogCard *c=&live_cards[index];cards[count++]=(PCard){c->id,c->name,c->type,c->poster_url,c->year,c->description};
+    }
+    pj_cache_write("/data/stremio-ps4-library.json",cards,count);
 }
 static void sync_account_data(void){
-    if(!auth_key[0]||!network_init())return;account_sync_status=1;char body[640];size_t size=0;
-    snprintf(body,sizeof(body),"{\"authKey\":\"%s\",\"collection\":\"libraryItem\",\"ids\":[],\"all\":true}",auth_key);
-    unsigned char *json=http_post_json("https://api.strem.io/api/datastoreGet",body,2*1024*1024,&size);
-    if(!json){account_sync_status=3;return;}const char *p=(char*)json;saved_id_count=0;
-    for(int i=CLOUD_CARD_START;i<CARD_CAPACITY;++i){if(live_cards[i].poster.pixels)stbi_image_free(live_cards[i].poster.pixels);memset(&live_cards[i],0,sizeof(live_cards[i]));}cloud_card_count=0;
-    while(saved_id_count<CARD_CAPACITY&&(p=strstr(p,"\"_id\":\""))){char id[24]={0};const char *next=json_value(p,"\"_id\":\"",id,sizeof(id),0);const char *object_end=strstr(next,"\"_id\":\"");const char *removed=strstr(p,"\"removed\":true");if(id[0]&&(!removed||(object_end&&removed>object_end))){strncpy(saved_ids[saved_id_count++],id,23);
-            int duplicate=0;for(int i=0;i<CLOUD_CARD_START;++i)if(!strcmp(live_cards[i].id,id)){duplicate=1;break;}if(!duplicate&&CLOUD_CARD_START+cloud_card_count<CARD_CAPACITY){CatalogCard *card=&live_cards[CLOUD_CARD_START+cloud_card_count++];strncpy(card->id,id,sizeof(card->id)-1);card->saved=1;const char *v;
-                if((v=strstr(p,"\"name\":\""))&&(!object_end||v<object_end))json_value(v,"\"name\":\"",card->name,sizeof(card->name),0);if((v=strstr(p,"\"type\":\""))&&(!object_end||v<object_end))json_value(v,"\"type\":\"",card->type,sizeof(card->type),1);if((v=strstr(p,"\"poster\":\""))&&(!object_end||v<object_end))json_value(v,"\"poster\":\"",card->poster_url,sizeof(card->poster_url),0);}}
-        p=next?next:p+7;}
-    free(json);apply_saved();for(int i=CLOUD_CARD_START;i<CLOUD_CARD_START+cloud_card_count&&i<CARD_CAPACITY;++i){CatalogCard *card=&live_cards[i];if(!card->name[0])strncpy(card->name,card->id,sizeof(card->name)-1);if(card->poster_url[0]){size_t image_size=0;if(strlen(card->poster_url)+4<sizeof(card->poster_url))strcat(card->poster_url,".jpg");unsigned char *encoded=http_get(card->poster_url,3*1024*1024,&image_size);if(encoded){int channels=0;card->poster.pixels=stbi_load_from_memory(encoded,(int)image_size,&card->poster.width,&card->poster.height,&channels,4);free(encoded);}}}
-    snprintf(body,sizeof(body),"{\"type\":\"AddonCollectionGet\",\"authKey\":\"%s\",\"update\":true}",auth_key);
-    json=http_post_json("https://api.strem.io/api/addonCollectionGet",body,2*1024*1024,&size);account_addon_count=0;
-    if(json){p=(char*)json;while((p=strstr(p,"\"transportUrl\""))){++account_addon_count;p+=14;}free(json);}
-    account_sync_status=2;
+    if(!auth_key[0]||!network_init())return;
+    account_sync_status=1;char body[1024];size_t size=0;int library_ok=0,addons_ok=0;
+    if(!pj_request(body,sizeof(body),auth_key,0)){account_sync_status=3;return;}
+    unsigned char *raw=http_post_json("https://api.strem.io/api/datastoreGet",body,4*1024*1024,&size);
+    PJson doc=pj_parse((char*)raw);free(raw);PJson list=pj_get(doc,"result");
+    /* Validate the whole response before touching a previously usable library. */
+    if(pj_array(list)){
+        library_ok=1;library_truncated=0;
+        /* Merge remote records; do not discard locally saved offline titles. */
+        for(int i=0;i<pj_size(list);++i){
+            PJson item=pj_at(list,i);if(pj_bool(pj_get(item,"removed"))||pj_bool(pj_get(item,"temp")))continue;
+            CatalogCard parsed={0};card_from_json(&parsed,item,1);if(!parsed.id[0]||!parsed.name[0])continue;
+            if(!id_saved(parsed.id)&&saved_id_count<CARD_CAPACITY)snprintf(saved_ids[saved_id_count++],sizeof(saved_ids[0]),"%s",parsed.id);
+            int duplicate=0;for(int k=0;k<CLOUD_CARD_START+cloud_card_count;++k)if(!strcmp(live_cards[k].id,parsed.id)){duplicate=1;break;}
+            if(!duplicate){if(CLOUD_CARD_START+cloud_card_count<CARD_CAPACITY)live_cards[CLOUD_CARD_START+cloud_card_count++]=parsed;else library_truncated=1;}
+        }
+        apply_saved();
+    }
+    pj_free(doc);
+    if(pj_request(body,sizeof(body),auth_key,1)){
+        raw=http_post_json("https://api.strem.io/api/addonCollectionGet",body,4*1024*1024,&size);
+        doc=pj_parse((char*)raw);free(raw);
+        list=pj_get(pj_get(doc,"result"),"addons");
+        if(pj_array(list)){pj_free(addon_document);addon_document=doc;doc=0;account_addon_count=pj_size(list);addons_ok=1;}
+        pj_free(doc);
+    }
+    account_sync_status=library_ok&&addons_ok?2:library_ok||addons_ok?4:3;
+}
+static void load_card_poster(CatalogCard *card){
+    if(card->poster.pixels||card->poster_attempted||!card->poster_url[0]||__atomic_load_n(&network_cancel,__ATOMIC_ACQUIRE))return;
+    card->poster_attempted=1;
+    char url[768];snprintf(url,sizeof(url),"%s",card->poster_url);
+    /* Metahub supports explicit JPEG; arbitrary addon URLs must stay intact. */
+    if(strstr(url,"https://images.metahub.space/") == url && !strstr(url,".jpg") && !strchr(url,'?') && strlen(url)+4<sizeof(url))strcat(url,".jpg");
+    size_t size=0;unsigned char *raw=http_get(url,3*1024*1024,&size);if(!raw)return;
+    int w=0,h=0,ch=0;
+    if(stbi_info_from_memory(raw,(int)size,&w,&h,&ch)&&w>0&&h>0&&(size_t)w*h<=4096*4096){
+        unsigned char *pixels=stbi_load_from_memory(raw,(int)size,&w,&h,&ch,4);
+        if(pixels){int tw=w>360?360:w,th=(int)((int64_t)h*tw/w);if(th<1)th=1;
+            unsigned char *small=malloc((size_t)tw*th*4);
+            if(small){for(int y=0;y<th;++y)for(int x=0;x<tw;++x)memcpy(small+((size_t)y*tw+x)*4,pixels+((size_t)(y*h/th)*w+x*w/tw)*4,4);
+                card->poster=(Image){small,tw,th};}
+            stbi_image_free(pixels);
+        }
+    }
+    free(raw);
+}
+static void prepare_library_page(int page){
+    int wanted[5];for(int j=0;j<5;++j)wanted[j]=saved_index(page*5+j);
+    for(int i=CLOUD_CARD_START;i<CARD_CAPACITY;++i){
+        int keep=0;for(int j=0;j<5;++j)if(wanted[j]==i)keep=1;
+        if(!keep){stbi_image_free(live_cards[i].poster.pixels);live_cards[i].poster=(Image){0};live_cards[i].poster_attempted=0;}
+    }
+    for(int j=0;j<5;++j)if(wanted[j]>=0)load_card_poster(&live_cards[wanted[j]]);
 }
 static void validate_public_domain(void){
     public_domain_online=0;if(!public_domain_enabled||!network_init())return;size_t size=0;
@@ -179,20 +270,14 @@ static void validate_public_domain(void){
     if(json){public_domain_online=strstr((char*)json,"org.stremio.pubdomainmovies")!=0;free(json);}
 }
 
-static int parse_catalog(char *json,int first,int maximum){
-    const char *p=json;int count=0;while(count<maximum&&(p=strstr(p,"\"imdb_id\":\""))){
-        CatalogCard *card=&live_cards[first+count];
-        json_value(p,"\"imdb_id\":\"",card->id,sizeof(card->id),0);
-        const char *name=strstr(p,"\"name\":\"");if(!name)break;
-        const char *after=json_value(name,"\"name\":\"",card->name,sizeof(card->name),0);if(!after)break;
-        const char *type=strstr(after,"\"type\":\"");if(type)json_value(type,"\"type\":\"",card->type,sizeof(card->type),1);
-        const char *description=strstr(after,"\"description\":\"");if(description)json_value(description,"\"description\":\"",card->description,sizeof(card->description),0);
-        const char *year=strstr(after,"\"releaseInfo\":\"");if(year)json_value(year,"\"releaseInfo\":\"",card->year,sizeof(card->year),1);
-        const char *poster=strstr(after,"\"poster\":\"");if(!poster){p=after;continue;}
-        p=json_value(poster,"\"poster\":\"",card->poster_url,sizeof(card->poster_url),0);if(!p)break;++count;
-    }return count;
+static int parse_catalog(char *text,int first,int maximum){
+    PJson doc=pj_parse(text),list=pj_get(doc,"metas");int count=0;
+    for(int i=0;i<pj_size(list)&&count<maximum&&first+count<CARD_CAPACITY;++i){
+        CatalogCard card={0};card_from_json(&card,pj_at(list,i),0);
+        if(card.id[0]&&card.name[0])live_cards[first+count++]=card;
+    }
+    pj_free(doc);return count;
 }
-
 static void load_live_catalog(void){
     catalog_status=1;if(!network_init()){catalog_status=3;return;}size_t size=0;
     // v3-cinemeta currently redirects this resource. SceHttp does not follow
@@ -201,13 +286,7 @@ static void load_live_catalog(void){
     if(!json){catalog_status=4;return;}int movies=parse_catalog((char*)json,0,5);free(json);if(movies==0){catalog_status=5;return;}
     json=http_get("https://cinemeta-catalogs.strem.io/top/catalog/series/top.json",2*1024*1024,&size);
     int series=0;if(json){series=parse_catalog((char*)json,movies,5);free(json);}catalog_count=movies+series;
-    for(int i=0;i<catalog_count;++i){size_t image_size=0;
-        // The extensionless endpoint can redirect or return WebP. Its JPEG
-        // representation is direct and supported by the native decoder.
-        if(strlen(live_cards[i].poster_url)+4<sizeof(live_cards[i].poster_url))strcat(live_cards[i].poster_url,".jpg");
-        unsigned char *encoded=http_get(live_cards[i].poster_url,3*1024*1024,&image_size);
-        if(encoded){int channels=0;live_cards[i].poster.pixels=stbi_load_from_memory(encoded,(int)image_size,&live_cards[i].poster.width,&live_cards[i].poster.height,&channels,4);
-            if(live_cards[i].poster.pixels)++poster_count;free(encoded);}}
+    for(int i=0;i<catalog_count;++i){load_card_poster(&live_cards[i]);if(live_cards[i].poster.pixels)++poster_count;}
     apply_saved();catalog_status=2;
 }
 
@@ -225,58 +304,87 @@ static void run_search(const char *query){
     strcpy(url,"https://v3-cinemeta.strem.io/catalog/series/top/search=");used=strlen(url);
     for(const char *p=query;*p&&used+4<sizeof(url);++p){if(*p==' '){strcpy(url+used,"%20");used+=3;}else url[used++]=*p;}strcpy(url+used,".json");
     json=http_get(url,1024*1024,&size);int series=0;if(json){series=parse_catalog((char*)json,10+movies,5-movies);free(json);}search_count=movies+series;if(!search_count){search_status=3;return;}
-    for(int i=0;i<search_count;++i){CatalogCard *card=&live_cards[10+i];size_t image_size=0;
-        if(strlen(card->poster_url)+4<sizeof(card->poster_url))strcat(card->poster_url,".jpg");
-        unsigned char *encoded=http_get(card->poster_url,3*1024*1024,&image_size);if(encoded){int channels=0;
-            card->poster.pixels=stbi_load_from_memory(encoded,(int)image_size,&card->poster.width,&card->poster.height,&channels,4);free(encoded);}}
+    for(int i=0;i<search_count;++i)load_card_poster(&live_cards[10+i]);
     apply_saved();search_status=2;
 }
 
-static void parse_genres(const char *json,char *out,size_t capacity){
-    const char *p=strstr(json,"\"genres\":[");size_t used=0;if(!p){out[0]=0;return;}p+=10;
-    while(*p&&*p!=']'&&used+2<capacity){while(*p&&*p!='\"'&&*p!=']')++p;if(*p!= '\"')break;++p;
-        if(used&&used+3<capacity){out[used++]=' ';out[used++]=' ';}while(*p&&*p!='\"'&&used+1<capacity){char c=*p++;out[used++]=c>='a'&&c<='z'?c-32:c;}if(*p=='\"')++p;}out[used]=0;
+static Image load_remote_art(const char *source,const char *extension,int max_width){
+    Image out={0};if(!source||!*source)return out;char url[1024];snprintf(url,sizeof(url),"%s",source);
+    if(strstr(url,"https://images.metahub.space/")==url&&!strstr(url,extension)&&!strchr(url,'?')&&strlen(url)+strlen(extension)<sizeof(url))strcat(url,extension);
+    size_t size=0;unsigned char *raw=http_get(url,5*1024*1024,&size);if(!raw)return out;int w,h,ch;
+    if(stbi_info_from_memory(raw,(int)size,&w,&h,&ch)&&w>0&&h>0&&(size_t)w*h<=4096*4096){
+        unsigned char *decoded=stbi_load_from_memory(raw,(int)size,&w,&h,&ch,4);
+        if(decoded){int tw=w>max_width?max_width:w,th=(int)((int64_t)h*tw/w);if(th<1)th=1;
+            out.pixels=malloc((size_t)tw*th*4);if(out.pixels){out.width=tw;out.height=th;for(int y=0;y<th;++y)for(int x=0;x<tw;++x)memcpy(out.pixels+((size_t)y*tw+x)*4,decoded+((size_t)(y*h/th)*w+x*w/tw)*4,4);}
+            stbi_image_free(decoded);
+        }
+    }free(raw);return out;
 }
 static void load_metadata(CatalogCard *card){
-    if(!card->id[0]||(card->metadata_loaded&&!strcmp(hero_id,card->id)))return;char url[256];strcpy(url,"https://v3-cinemeta.strem.io/meta/");
-    strcat(url,card->type[0]?card->type:"MOVIE");for(char *p=url;*p;++p)if(*p>='A'&&*p<='Z')*p+=32;
-    strcat(url,"/");strcat(url,card->id);strcat(url,".json");size_t size=0;unsigned char *json=http_get(url,1024*1024,&size);
-    if(!json)return;const char *p=(char*)json;const char *v;
-    if((v=strstr(p,"\"description\":\"")))json_value(v,"\"description\":\"",card->description,sizeof(card->description),0);
-    if((v=strstr(p,"\"runtime\":\"")))json_value(v,"\"runtime\":\"",card->runtime,sizeof(card->runtime),1);
-    if((v=strstr(p,"\"imdbRating\":\"")))json_value(v,"\"imdbRating\":\"",card->rating,sizeof(card->rating),1);
-    parse_genres(p,card->genres,sizeof(card->genres));
-    char art_url[384];if(hero_background.pixels){stbi_image_free(hero_background.pixels);memset(&hero_background,0,sizeof(hero_background));}if(hero_logo.pixels){stbi_image_free(hero_logo.pixels);memset(&hero_logo,0,sizeof(hero_logo));}
-    if((v=strstr(p,"\"background\":\""))){json_value(v,"\"background\":\"",art_url,sizeof(art_url),0);if(strlen(art_url)+4<sizeof(art_url))strcat(art_url,".jpg");size_t art_size=0;unsigned char *encoded=http_get(art_url,5*1024*1024,&art_size);if(encoded){int channels=0;hero_background.pixels=stbi_load_from_memory(encoded,(int)art_size,&hero_background.width,&hero_background.height,&channels,4);free(encoded);}}
-    if((v=strstr(p,"\"logo\":\""))){json_value(v,"\"logo\":\"",art_url,sizeof(art_url),0);if(strlen(art_url)+4<sizeof(art_url))strcat(art_url,".png");size_t art_size=0;unsigned char *encoded=http_get(art_url,2*1024*1024,&art_size);if(encoded){int channels=0;hero_logo.pixels=stbi_load_from_memory(encoded,(int)art_size,&hero_logo.width,&hero_logo.height,&channels,4);free(encoded);}}
-    strncpy(hero_id,card->id,sizeof(hero_id)-1);card->metadata_loaded=1;free(json);
+    if(!card->id[0]||(card->metadata_loaded&&!strcmp(hero_id,card->id)))return;
+    char url[1024];snprintf(url,sizeof(url),"https://v3-cinemeta.strem.io/meta/%s/%s.json",!strcmp(card->type,"SERIES")?"series":"movie",card->id);
+    size_t size=0;unsigned char *raw=http_get(url,2*1024*1024,&size);PJson doc=pj_parse((char*)raw);free(raw);PJson meta=pj_get(doc,"meta");
+    if(!meta){pj_free(doc);return;}
+    pj_copy(pj_get(meta,"description"),card->description,sizeof(card->description));
+    pj_copy(pj_get(meta,"runtime"),card->runtime,sizeof(card->runtime));pj_copy(pj_get(meta,"imdbRating"),card->rating,sizeof(card->rating));
+    PJson genres=pj_get(meta,"genres");card->genres[0]=0;
+    for(int i=0;i<pj_size(genres);++i){const char *g=pj_string(pj_at(genres,i));size_t n=strlen(card->genres);if(n+strlen(g)+3>=sizeof(card->genres))break;if(n)strcat(card->genres,"  ");strcat(card->genres,g);}
+    stbi_image_free(hero_background.pixels);stbi_image_free(hero_logo.pixels);
+    hero_background=load_remote_art(pj_string(pj_get(meta,"background")),".jpg",1280);
+    hero_logo=load_remote_art(pj_string(pj_get(meta,"logo")),".png",640);
+    snprintf(hero_id,sizeof(hero_id),"%s",card->id);card->metadata_loaded=1;pj_free(doc);
 }
+static int compare_episode(const void *a,const void *b){const Episode *x=a,*y=b;if(x->season!=y->season)return (x->season>y->season)-(x->season<y->season);return (x->number>y->number)-(x->number<y->number);}
 static void load_episode_catalog(CatalogCard *card){
     if(!strcmp(episode_series_id,card->id)&&episode_count)return;episode_count=max_season=0;episode_series_id[0]=0;
-    char url[256];snprintf(url,sizeof(url),"https://v3-cinemeta.strem.io/meta/series/%s.json",card->id);size_t size=0;unsigned char *json=http_get(url,2*1024*1024,&size);if(!json)return;
-    const char *p=(char*)json,*videos=strstr(p,"\"videos\":[");if(videos)p=videos;
-    while(episode_count<80&&(p=strstr(p,"\"name\":\""))){const char *season=strstr(p,"\"season\":");if(!season||season-p>800)break;int s=atoi(season+9);const char *number=strstr(season,"\"number\":");const char *id=strstr(season,"\"id\":\"");
-        if(s>0&&number&&id&&number-season<100&&id-season<700){Episode *e=&episodes[episode_count++];json_value(p,"\"name\":\"",e->name,sizeof(e->name),0);e->season=s;e->number=atoi(number+9);json_value(id,"\"id\":\"",e->id,sizeof(e->id),0);
-            const char *description=strstr(id,"\"description\":\"");if(description&&description-id<800)json_value(description,"\"description\":\"",e->description,sizeof(e->description),0);if(s>max_season)max_season=s;}
-        p=season+10;}
-    strncpy(episode_series_id,card->id,sizeof(episode_series_id)-1);free(json);
+    char url[1024];snprintf(url,sizeof(url),"https://v3-cinemeta.strem.io/meta/series/%s.json",card->id);
+    size_t size=0;unsigned char *raw=http_get(url,4*1024*1024,&size);PJson doc=pj_parse((char*)raw);free(raw);
+    PJson videos=pj_get(pj_get(doc,"meta"),"videos");
+    for(int i=0;i<pj_size(videos)&&episode_count<2048;++i){
+        PJson item=pj_at(videos,i);Episode e={0};pj_copy(pj_get(item,"id"),e.id,sizeof(e.id));if(!e.id[0])continue;
+        e.season=(int)pj_number(pj_get(item,"season"),0);e.number=(int)pj_number(pj_get(item,"episode"),pj_number(pj_get(item,"number"),0));
+        if(e.season<0||e.number<0)continue;
+        pj_copy(pj_get(item,"title"),e.name,sizeof(e.name));if(!e.name[0])pj_copy(pj_get(item,"name"),e.name,sizeof(e.name));
+        pj_copy(pj_get(item,"overview"),e.description,sizeof(e.description));if(!e.description[0])pj_copy(pj_get(item,"description"),e.description,sizeof(e.description));
+        episodes[episode_count++]=e;if(e.season>max_season)max_season=e.season;
+    }
+    qsort(episodes,episode_count,sizeof(episodes[0]),compare_episode);
+    if(episode_count)snprintf(episode_series_id,sizeof(episode_series_id),"%s",card->id);pj_free(doc);
 }
 static int first_episode_in_season(int season){for(int i=0;i<episode_count;++i)if(episodes[i].season==season)return i;return -1;}
 static void load_stream_sources(CatalogCard *card){
-    stream_count=0;stream_status=1;memset(stream_sources,0,sizeof(stream_sources));
-    if(!public_domain_enabled||!public_domain_online){stream_status=4;return;}char url[512];
-    const char *id=!strcmp(card->type,"SERIES")&&selected_video_id[0]?selected_video_id:card->id;
-    snprintf(url,sizeof(url),"https://caching.stremio.net/publicdomainmovies.now.sh/stream/%s/%s.json",!strcmp(card->type,"SERIES")?"series":"movie",id);
-    size_t size=0;unsigned char *json=http_get(url,512*1024,&size);if(!json){stream_status=5;return;}const char *p=(char*)json;
-    while(stream_count<8&&(p=strstr(p,"\"infoHash\":\""))){StreamSource *source=&stream_sources[stream_count];
-        const char *next=json_value(p,"\"infoHash\":\"",source->info_hash,sizeof(source->info_hash),0);const char *v;
-        if((v=strstr(p,"\"title\":\""))&&(!next||v<next+300))json_value(v,"\"title\":\"",source->title,sizeof(source->title),0);
-        if((v=strstr(p,"\"name\":\""))&&(!next||v<next+300))json_value(v,"\"name\":\"",source->name,sizeof(source->name),0);
-        if((v=strstr(p,"\"fileIdx\":"))&&(!next||v<next+300))source->file_index=atoi(v+10);
-        ++stream_count;p=next?next:p+12;}
-    free(json);stream_status=stream_count?2:3;
+    stream_count=stream_failures=stream_queried=0;stream_status=1;pj_stream_reset();
+    memset(stream_sources,0,sizeof(stream_sources));
+    const char *type=!strcmp(card->type,"SERIES")?"series":"movie";
+    const char *id=!strcmp(type,"series")&&selected_video_id[0]?selected_video_id:card->id;
+    PJson addons=pj_get(pj_get(addon_document,"result"),"addons");char url[8192];
+    for(int i=0;i<pj_size(addons);++i){
+        PJson addon=pj_at(addons,i),manifest=pj_get(addon,"manifest");
+        const char *transport=pj_string(pj_get(addon,"transportUrl"));
+        if(strncmp(transport,"https://",8)&&strncmp(transport,"http://",7))continue;
+        if(!pj_resource(manifest,transport,"stream",type,id,url,sizeof(url)))continue;
+        ++stream_queried;size_t size=0;unsigned char *raw=http_get(url,2*1024*1024,&size);
+        if(!raw||pj_streams((char*)raw,pj_string(pj_get(manifest,"name")))<0)++stream_failures;
+        free(raw);
+    }
+    if(public_domain_enabled&&public_domain_online){
+        snprintf(url,sizeof(url),"https://caching.stremio.net/publicdomainmovies.now.sh/stream/%s/%s.json",type,id);
+        ++stream_queried;size_t size=0;unsigned char *raw=http_get(url,2*1024*1024,&size);
+        if(!raw||pj_streams((char*)raw,"Public Domain Movies")<0)++stream_failures;free(raw);
+    }
+    for(int i=0;i<128;++i){
+        const char *name=pj_stream_field(i,0),*direct=pj_stream_field(i,2),*hash=pj_stream_field(i,3);
+        if(!*direct&&!*hash)break;
+        if(strlen(direct)>=sizeof(stream_sources[0].url)||strlen(hash)>=sizeof(stream_sources[0].info_hash)){++stream_failures;continue;}
+        StreamSource *dst=&stream_sources[stream_count++];
+        snprintf(dst->name,sizeof(dst->name),"%s",name);
+        snprintf(dst->title,sizeof(dst->title),"%s",pj_stream_field(i,1));
+        snprintf(dst->url,sizeof(dst->url),"%s",direct);snprintf(dst->info_hash,sizeof(dst->info_hash),"%s",hash);
+        snprintf(dst->addon,sizeof(dst->addon),"%s",pj_stream_field(i,4));dst->file_index=pj_stream_file(i);dst->needs_headers=pj_stream_needs_headers(i);
+    }
+    stream_status=stream_count?2:!stream_queried?4:stream_failures?5:3;
 }
-static int saved_index(int slot){int found=0;for(int i=0;i<CARD_CAPACITY;++i)if(live_cards[i].saved&&live_cards[i].name[0]){if(found==slot)return i;++found;}return -1;}
+static int saved_index(int slot){return slot>=0&&slot<library_count?library_order[slot]:-1;}
 
 static void park_error(const char *message,int code){
     sceKernelDebugOutText(0,"[stremio-ps4] %s: 0x%08x\n",message,(unsigned)code);
@@ -444,15 +552,19 @@ static void draw_library(void *b,const AppState *s){
     draw_round_rect(b,190,805,500,64,32,SURFACE_HI);draw_image(b,&check_icon,212,818,36,36);draw_text(b,266,824,"Saved locally on PS4",3,INK_2);
 }
 static void draw_addons(void *b,const AppState *s){
-    draw_text(b,190,154,"Addons",6,INK_2);char addon_summary[64];snprintf(addon_summary,sizeof(addon_summary),auth_key[0]?"%d account addons":"2 local addons",auth_key[0]?account_addon_count:2);draw_text(b,190,210,addon_summary,3,INK_3);
-    const char *names[]={"CINEMETA","PUBLIC DOMAIN","LOCAL FILES","COMMUNITY"};
-    const char *descriptions[]={"Movies and series metadata","Classic films with legal streams","Play media from USB storage","Install addons from a manifest URL"};
-    for(int i=0;i<4;++i){int col=i%2,row=i/2,x=190+col*690,y=270+row*280;draw_round_rect(b,x,y,650,240,30,!s->rail_focus&&s->row==i?SURFACE_HI:SURFACE);
-        int enabled=i==0||(i==1&&public_domain_enabled);draw_round_rect(b,x+26,y+26,86,86,22,enabled?0xff563aa7u:0xff584667u);draw_text(b,x+145,y+32,names[i],4,INK);
-        const char *status=i==0?"INSTALLED":i==1?(public_domain_enabled?(public_domain_online?"ONLINE":"ENABLED - CROSS TO CHECK"):"DISABLED"):"AVAILABLE";
-        draw_text(b,x+145,y+74,status,3,enabled?ACCENT_SOFT:INK_3);draw_text(b,x+28,y+150,descriptions[i],3,INK_2);
-        draw_round_rect(b,x+28,y+194,110,30,15,0xff3b343du);draw_text(b,x+48,y+201,i<2?"Movies":"Source",2,INK_2);
-        if(i>=2)draw_image(b,&chevron_icon,x+590,y+100,30,30);if(!s->rail_focus&&s->row==i)draw_focus(b,x,y,650,240);}
+    draw_text(b,190,154,"Addons",6,INK);
+    PJson addons=pj_get(pj_get(addon_document,"result"),"addons");int total=pj_size(addons)+2;
+    char summary[96];snprintf(summary,sizeof(summary),"%d account addons  /  Options: sync",account_addon_count);draw_text(b,190,218,summary,3,INK_3);
+    int start=(s->row/5)*5;
+    for(int i=start;i<total&&i<start+5;++i){
+        int y=290+(i-start)*126;const char *name,*description;
+        if(i<2){name=i?"Public Domain Movies":"Cinemeta";description=i?(public_domain_enabled?"Enabled - Cross to disable":"Disabled - Cross to enable"):"Built-in movie and series catalogs";}
+        else {PJson a=pj_at(addons,i-2),m=pj_get(a,"manifest");name=pj_string(pj_get(m,"name"));description=pj_string(pj_get(m,"description"));}
+        draw_round_rect(b,190,y,1470,102,24,SURFACE);
+        draw_image(b,&nav_line[3],212,y+24,48,48);char label[65],desc[94];snprintf(label,sizeof(label),"%.64s",name);snprintf(desc,sizeof(desc),"%.93s",description);
+        draw_text(b,294,y+16,label,4,INK);draw_text(b,294,y+62,desc,2,INK_3);
+        if(!s->rail_focus&&s->row==i)draw_focus(b,190,y,1470,102);
+    }
 }
 static void draw_wrapped(void *b,int x,int y,const char *text,int columns,int lines);
 static void draw_settings(void *b,const AppState *s){
@@ -460,19 +572,19 @@ static void draw_settings(void *b,const AppState *s){
     const char *names[]={"BUILTIN TORRENTS","AUTO SUBTITLES","AUTOPLAY NEXT","UI SOUNDS","PERFORMANCE OVERLAY"};
     for(int i=0;i<5;++i){int y=200+i*100;draw_round_rect(b,190,y,950,78,22,!s->rail_focus&&s->row==i?SURFACE_HI:SURFACE);
         draw_text(b,226,y+32,names[i],4,!s->rail_focus&&s->row==i?INK:INK_2);draw_round_rect(b,1000,y+24,104,42,21,s->settings[i]?0xff563aa7u:0xff514951u);
-        draw_text(b,1025,y+32,s->settings[i]?"ON":"OFF",3,INK);if(!s->rail_focus&&s->row==i)draw_focus(b,190,y,950,78);}
+        draw_text(b,1025,y+32,i<4?"N/A":s->settings[i]?"ON":"OFF",3,INK);if(!s->rail_focus&&s->row==i)draw_focus(b,190,y,950,78);}
     int y=710;draw_round_rect(b,190,y,950,78,22,!s->rail_focus&&s->row==5?SURFACE_HI:SURFACE);draw_text(b,226,y+28,"STREMIO ACCOUNT",4,INK_2);
     draw_text(b,890,y+30,auth_key[0]?"LINKED":"LINK DEVICE",3,auth_key[0]?ACCENT_SOFT:INK_3);if(!s->rail_focus&&s->row==5)draw_focus(b,190,y,950,78);
     const char *help_title=s->row==0?"BUILTIN TORRENTS":s->row==1?"AUTO SUBTITLES":s->row==2?"AUTOPLAY NEXT":s->row==3?"UI SOUNDS":s->row==4?"PERFORMANCE OVERLAY":"STREMIO ACCOUNT";
-    const char *help=s->row==0?"USE STREAM ADDONS DIRECTLY ON THE CONSOLE":s->row==1?"LOAD AVAILABLE SUBTITLES AUTOMATICALLY":s->row==2?"CONTINUE TO THE NEXT EPISODE":s->row==3?"PLAY SOFT SOUNDS WHILE NAVIGATING":s->row==4?"SHOW MEASURED FPS AND FRAME TIME. GOLDHEN GAME OVERLAY CAN RUN ALONGSIDE IT":"LINK YOUR ACCOUNT WITH A SECURE SHORT CODE";
-    draw_round_outline(b,1200,200,620,568,32,2,0xff514651u);draw_text(b,1245,260,help_title,4,INK);draw_text(b,1245,330,s->row<5?(s->settings[s->row]?"ON":"OFF"):(auth_key[0]?"LINKED":"NOT LINKED"),4,ACCENT_SOFT);
+    const char *help=s->row==0?"Torrent sources resolve, but the torrent engine is not yet ported.":s->row==1?"Subtitle decoding and rendering are not available in this player yet.":s->row==2?"Automatic next-episode playback is not available yet.":s->row==3?"The PS5 sound mixer is not connected to this renderer yet.":s->row==4?"SHOW MEASURED FPS AND FRAME TIME. GOLDHEN GAME OVERLAY CAN RUN ALONGSIDE IT":"LINK YOUR ACCOUNT WITH A SECURE SHORT CODE";
+    draw_round_outline(b,1200,200,620,568,32,2,0xff514651u);draw_text(b,1245,260,help_title,4,INK);draw_text(b,1245,330,s->row<4?"NOT PORTED":s->row<5?(s->settings[s->row]?"ON":"OFF"):(auth_key[0]?"LINKED":"NOT LINKED"),4,ACCENT_SOFT);
     draw_wrapped(b,1245,410,help,31,5);draw_round_rect(b,1245,650,230,58,29,INK);draw_image(b,&cross_icon,1260,660,38,38);draw_text(b,1312,670,s->row==5?"OPEN":"SWITCH",3,GROUND);
 }
 static void draw_account(void *b,const AppState *s){
     (void)s;draw_text(b,190,140,"Stremio account",6,INK_2);draw_text(b,190,205,"Link this PS4 to your Stremio account",3,INK_3);
     draw_round_rect(b,190,270,1420,430,34,SURFACE);draw_round_rect(b,230,310,180,180,36,0xff3d2a73u);draw_image(b,logo_large.pixels?&logo_large:&logo,270,350,100,100);
     if(account_status==4){draw_round_rect(b,460,320,270,48,24,0xff315d3fu);draw_text(b,500,334,"ACCOUNT LINKED",3,0xff8cffaau);
-        draw_text(b,460,410,"WELCOME BACK",6,INK);draw_text(b,460,500,"YOUR SECURE ACCOUNT KEY IS SAVED LOCALLY",3,INK_2);char sync[96];snprintf(sync,sizeof(sync),account_sync_status==1?"SYNCING LIBRARY AND ADDONS":account_sync_status==2?"SYNCED  %d LIBRARY ITEMS  %d ADDONS":account_sync_status==3?"SYNC FAILED  PRESS OPTIONS TO RETRY":"PRESS OPTIONS TO SYNC",saved_id_count,account_addon_count);draw_text(b,460,550,sync,3,account_sync_status==3?ACCENT_SOFT:INK_3);}
+        draw_text(b,460,410,"WELCOME BACK",6,INK);draw_text(b,460,500,"YOUR SECURE ACCOUNT KEY IS SAVED LOCALLY",3,INK_2);char sync[96];snprintf(sync,sizeof(sync),account_sync_status==1?"SYNCING LIBRARY AND ADDONS":account_sync_status==2?"SYNCED  %d LIBRARY ITEMS  %d ADDONS":account_sync_status==4?"PARTIAL SYNC  PRESS OPTIONS TO RETRY":account_sync_status==3?"SYNC FAILED  PRESS OPTIONS TO RETRY":"PRESS OPTIONS TO SYNC",saved_id_count,account_addon_count);draw_text(b,460,550,sync,3,account_sync_status==3?ACCENT_SOFT:INK_3);}
     else {draw_text(b,460,330,account_status==1?"CREATING CODE":account_status==3?"CHECKING APPROVAL":account_status==5?"LINK SERVICE UNAVAILABLE":"ENTER THIS CODE",4,INK_2);
         if(link_code[0]){draw_round_rect(b,460,390,420,116,28,0xff35264fu);draw_text(b,510,418,link_code,10,ACCENT_SOFT);draw_text(b,460,560,"OPEN LINK STREMIO COM ON YOUR PHONE",3,INK);}}
     draw_round_rect(b,230,760,350,62,31,INK);draw_image(b,&cross_icon,250,772,38,38);draw_text(b,305,782,account_status==4?"LINKED":"CHECK APPROVAL",3,GROUND);
@@ -520,14 +632,14 @@ static void draw_streams(void *b,const AppState *s){
     CatalogCard *card=&live_cards[s->detail_index];draw_text(b,190,140,"STREAM SOURCES",6,INK);
     draw_text(b,190,220,card->name,4,ACCENT_SOFT);
     if(stream_count){
-        for(int i=0;i<stream_count&&i<5;++i){int y=290+i*120,focused=i==s->stream_cursor;StreamSource *source=&stream_sources[i];
+        for(int i=(s->stream_cursor/5)*5;i<stream_count&&i<(s->stream_cursor/5)*5+5;++i){int y=290+(i%5)*120,focused=i==s->stream_cursor;StreamSource *source=&stream_sources[i];
             draw_round_rect(b,190,y,1420,96,26,focused?SURFACE_HI:SURFACE);draw_round_rect(b,220,y+20,120,56,18,0xff563aa7u);
-            draw_text(b,245,y+36,source->name[0]?source->name:"SOURCE",3,INK);draw_text(b,380,y+24,"Public Domain Movies",4,INK);
-            draw_text(b,380,y+62,source->title[0]?source->title:"Torrent source",3,INK_3);draw_image(b,&play_small_icon,1320,y+34,28,28);draw_text(b,1360,y+38,"READY",3,ACCENT_SOFT);
+            draw_text(b,245,y+36,source->name[0]?source->name:"SOURCE",3,INK);draw_text(b,380,y+24,source->addon,4,INK);
+            draw_text(b,380,y+62,source->title[0]?source->title:"Torrent source",3,INK_3);draw_image(b,&play_small_icon,1320,y+34,28,28);draw_text(b,1360,y+38,source->url[0]?"HTTP":"TORRENT",3,ACCENT_SOFT);
             if(focused)draw_focus(b,190,y,1420,96);}
-        draw_image(b,&cross_icon,190,920,38,38);draw_text(b,244,930,stream_status==6?"PLAYER IN DEVELOPMENT":"SELECT SOURCE",3,INK_2);
+        draw_image(b,&cross_icon,190,920,38,38);draw_text(b,244,930,"SELECT SOURCE",3,INK_2);
     }else {draw_round_rect(b,190,300,1420,280,32,SURFACE);
-        if(stream_status==3){draw_round_rect(b,230,340,84,84,42,0xff315d3fu);draw_image(b,&check_icon,252,362,40,40);draw_text(b,350,360,"No compatible streams found",5,INK);draw_text(b,350,435,"Public Domain was checked for this title",3,INK_2);}
+        if(stream_status==3){draw_round_rect(b,230,340,84,84,42,0xff315d3fu);draw_image(b,&check_icon,252,362,40,40);draw_text(b,350,360,"No compatible streams found",5,INK);draw_text(b,350,435,"Installed sources were checked for this title",3,INK_2);}
         else if(stream_status==5){draw_text(b,250,370,"Source request failed",5,INK);draw_text(b,250,450,"Check the network and try again",3,INK_2);}
         else {draw_text(b,250,370,"No stream addon is enabled",5,INK);draw_text(b,250,450,"Open Addons to configure a source",3,INK_2);}
         draw_round_rect(b,250,630,500,82,41,0xff563aa7u);draw_image(b,&cross_icon,278,652,38,38);draw_text(b,340,654,"OPEN ADDONS",4,INK);}
@@ -559,7 +671,22 @@ static void draw_footer(void *b,const AppState *s){
 }
 static void show_toast(const char *message){strncpy(toast_text,message,sizeof(toast_text)-1);toast_text[sizeof(toast_text)-1]=0;toast_frames=90;}
 static void draw_toast(void *b){if(!toast_frames||!toast_text[0])return;int w=520,x=WIDTH-w-70,y=900;draw_round_rect(b,x+8,y+10,w,70,35,0xff050405u);draw_round_rect(b,x,y,w,70,35,0xff3b343du);draw_image(b,&check_small_icon,x+24,y+21,28,28);draw_text(b,x+70,y+22,toast_text,3,INK);}
+static void draw_player(void *b){
+    PlaybackStatus p=playback_status();
+    if(video_canvas)memcpy(b,video_canvas,(size_t)WIDTH*HEIGHT*4);else fill_buffer(b,0xff000000u);
+    if(playback_controls||p.paused||p.buffering||p.error){
+        draw_rect(b,0,0,WIDTH,115,0xff110b0cu);draw_text(b,80,32,"Stremio player",5,INK);
+        char timeline[96];snprintf(timeline,sizeof(timeline),"%llu:%02llu / %llu:%02llu", (unsigned long long)(p.position_ms/60000),(unsigned long long)(p.position_ms/1000%60),(unsigned long long)(p.duration_ms/60000),(unsigned long long)(p.duration_ms/1000%60));
+        draw_rect(b,0,900,WIDTH,180,0xff110b0cu);draw_text(b,90,920,timeline,4,INK);
+        int played=p.duration_ms?(int)((double)p.position_ms/p.duration_ms*1740):0;if(played>1740)played=1740;
+        draw_round_rect(b,90,980,1740,8,4,SURFACE_HI);if(played>0)draw_round_rect(b,90,980,played,8,4,ACCENT_SOFT);
+        int x=90;x=draw_prompt(b,&cross_icon,p.paused?"PLAY":"PAUSE",x,1020);x=draw_prompt(b,&dpad_icon,"10 SEC",x,1020);x=draw_prompt(b,&l1_icon,"-1 MIN",x,1020);x=draw_prompt(b,&r1_icon,"+1 MIN",x,1020);draw_prompt(b,&circle_icon,"STOP",x,1020);
+        if(p.error||p.buffering){draw_round_rect(b,310,440,1300,150,30,SURFACE);draw_text(b,360,485,p.error?p.message:"Opening stream...",4,p.error?ACCENT_SOFT:INK);}
+        if(p.audio_error)draw_text(b,900,55,"Audio format/output unavailable",3,ACCENT_SOFT);
+    }
+}
 static void draw_screen(void *b,const AppState *s){
+    if(s->playing){draw_player(b);return;}
     draw_page_backdrop(b,s);draw_rail(b,s);draw_topbar(b,s);
     if(s->account)draw_account(b,s);
     else if(s->episodes)draw_episodes(b,s);
@@ -575,34 +702,59 @@ static int open_pad(void){
     result=sceUserServiceGetInitialUser(&user);if(result!=0)return result;return scePadOpen(user,0,0,0);
 }
 static void reset_cursor(AppState *s){s->row=0;s->column=0;s->library_page=0;}
+static void save_playback_progress(const AppState *s){
+    PlaybackStatus p=playback_status();if(p.has_video&&s->detail_index>=0&&s->detail_index<CARD_CAPACITY){
+        CatalogCard *card=&live_cards[s->detail_index];const char *video=selected_video_id[0]?selected_video_id:card->id;
+        pj_progress_save("/data/stremio-ps4-progress.json",card->id,video,(double)p.position_ms/1000.0,(double)p.duration_ms/1000.0);
+        progress_saved_ms=p.position_ms;
+    }
+}
 static int route_input(AppState *s,uint32_t pressed){
+    if(s->playing){
+        if(pressed)playback_controls=180;
+        if(pressed&ORBIS_PAD_BUTTON_CIRCLE){save_playback_progress(s);playback_close();s->playing=0;return 1;}
+        if(pressed&ORBIS_PAD_BUTTON_CROSS)playback_toggle_pause();
+        if(pressed&ORBIS_PAD_BUTTON_LEFT)playback_seek(-10);
+        if(pressed&ORBIS_PAD_BUTTON_RIGHT)playback_seek(10);
+        if(pressed&ORBIS_PAD_BUTTON_L1)playback_seek(-60);
+        if(pressed&ORBIS_PAD_BUTTON_R1)playback_seek(60);
+        return pressed!=0;
+    }
     if(s->account){
         if(pressed&ORBIS_PAD_BUTTON_CIRCLE)s->account=0;
-        if((pressed&ORBIS_PAD_BUTTON_CROSS)&&account_status!=4){poll_device_link();if(account_status==4)sync_account_data();show_toast(account_status==4?"Account linked and synced":"Approval not received yet");}
+        if((pressed&ORBIS_PAD_BUTTON_CROSS)&&account_status!=4){poll_device_link();if(account_status==4)sync_account_data();show_toast(account_status==4?(account_sync_status==2?"Account linked and synced":"Linked; sync needs retry"):"Approval not received yet");}
         if((pressed&ORBIS_PAD_BUTTON_OPTIONS)&&account_status==4){sync_account_data();save_state(s);show_toast(account_sync_status==2?"Account data synced":"Account sync failed");}
-        if(pressed&ORBIS_PAD_BUTTON_SQUARE){if(account_status==4){auth_key[0]=link_code[0]=0;account_status=0;save_account();show_toast("Account unlinked");}else{create_device_link();show_toast("New link code created");}}return pressed!=0;
+        if(pressed&ORBIS_PAD_BUTTON_SQUARE){if(account_status==4){auth_key[0]=link_code[0]=0;account_status=account_sync_status=account_addon_count=0;pj_free(addon_document);addon_document=0;save_account();show_toast("Account unlinked");}else{create_device_link();show_toast("New link code created");}}return pressed!=0;
     }
     if(s->episodes){
         if(pressed&ORBIS_PAD_BUTTON_CIRCLE){s->episodes=0;return 1;}
-        if(pressed&ORBIS_PAD_BUTTON_L1){for(int season=s->season-1;season>=1;--season){int first=first_episode_in_season(season);if(first>=0){s->season=season;s->episode_cursor=first;break;}}}
+        if(pressed&ORBIS_PAD_BUTTON_L1){for(int season=s->season-1;season>=0;--season){int first=first_episode_in_season(season);if(first>=0){s->season=season;s->episode_cursor=first;break;}}}
         if(pressed&ORBIS_PAD_BUTTON_R1){for(int season=s->season+1;season<=max_season;++season){int first=first_episode_in_season(season);if(first>=0){s->season=season;s->episode_cursor=first;break;}}}
         if(pressed&ORBIS_PAD_BUTTON_UP){for(int i=s->episode_cursor-1;i>=0;--i)if(episodes[i].season==s->season){s->episode_cursor=i;break;}}
         if(pressed&ORBIS_PAD_BUTTON_DOWN){for(int i=s->episode_cursor+1;i<episode_count;++i)if(episodes[i].season==s->season){s->episode_cursor=i;break;}}
-        if((pressed&ORBIS_PAD_BUTTON_CROSS)&&episode_count){strncpy(selected_video_id,episodes[s->episode_cursor].id,sizeof(selected_video_id)-1);load_stream_sources(&live_cards[s->detail_index]);s->streams=1;s->episodes=0;s->stream_cursor=0;}
+        if((pressed&ORBIS_PAD_BUTTON_CROSS)&&episode_count&&s->episode_cursor>=0&&s->episode_cursor<episode_count){strncpy(selected_video_id,episodes[s->episode_cursor].id,sizeof(selected_video_id)-1);load_stream_sources(&live_cards[s->detail_index]);s->streams=1;s->episodes=0;s->stream_cursor=0;}
         return pressed!=0;
     }
     if(s->streams){
         if(pressed&ORBIS_PAD_BUTTON_CIRCLE)s->streams=0;
         if(stream_count){if((pressed&ORBIS_PAD_BUTTON_UP)&&s->stream_cursor>0)--s->stream_cursor;if((pressed&ORBIS_PAD_BUTTON_DOWN)&&s->stream_cursor<stream_count-1)++s->stream_cursor;
-            if(pressed&ORBIS_PAD_BUTTON_CROSS)stream_status=6;}
+            if(pressed&ORBIS_PAD_BUTTON_CROSS){
+                StreamSource *source=&stream_sources[s->stream_cursor];
+                if(source->needs_headers){show_toast("This source requires HTTP header support");}
+                else if(source->url[0]){
+                    if(!video_canvas)video_canvas=malloc((size_t)WIDTH*HEIGHT*4);
+                    if(video_canvas){fill_buffer(video_canvas,0xff000000u);playback_open(source->url,http_context,ssl_context);CatalogCard *card=&live_cards[s->detail_index];const char *video=selected_video_id[0]?selected_video_id:card->id;playback_resume_at((uint64_t)(pj_progress_resume(card->id,video)*1000));progress_saved_ms=0;s->playing=1;playback_controls=180;}
+                    else show_toast("Not enough memory for video");
+                }else show_toast("Torrent backend still requires porting");
+            }}
         else if(pressed&ORBIS_PAD_BUTTON_CROSS){s->streams=0;s->detail=0;s->page=3;s->rail_focus=0;reset_cursor(s);}return pressed!=0;
     }
     if(s->detail){
         if(pressed&ORBIS_PAD_BUTTON_CIRCLE)s->detail=0;
         if(pressed&ORBIS_PAD_BUTTON_CROSS){CatalogCard *card=&live_cards[s->detail_index];s->stream_cursor=0;selected_video_id[0]=0;
-            if(!strcmp(card->type,"SERIES")){load_episode_catalog(card);s->season=1;s->episode_cursor=first_episode_in_season(1);if(s->episode_cursor<0){s->season=max_season;s->episode_cursor=first_episode_in_season(max_season);}s->episodes=1;}
+            if(!strcmp(card->type,"SERIES")){load_episode_catalog(card);s->season=1;s->episode_cursor=first_episode_in_season(1);if(s->episode_cursor<0&&episode_count){s->season=episodes[0].season;s->episode_cursor=0;}s->episodes=1;}
             else {load_stream_sources(card);s->streams=1;}}
-        if(pressed&ORBIS_PAD_BUTTON_SQUARE){live_cards[s->detail_index].saved^=1;save_state(s);show_toast(live_cards[s->detail_index].saved?"Added to Library":"Removed from Library");}
+        if(pressed&ORBIS_PAD_BUTTON_SQUARE){toggle_saved(&live_cards[s->detail_index]);save_state(s);show_toast(live_cards[s->detail_index].saved?"Added to Library":"Removed from Library");}
         return pressed!=0;
     }
     if(s->search){
@@ -631,6 +783,7 @@ static int route_input(AppState *s,uint32_t pressed){
         return pressed!=0;
     }
     if(pressed&ORBIS_PAD_BUTTON_TRIANGLE){s->search=1;return 1;}
+    if((pressed&ORBIS_PAD_BUTTON_OPTIONS)&&s->page==2){for(int i=0;i<CARD_CAPACITY;++i)live_cards[i].poster_attempted=0;show_toast("Refreshing Library artwork");return 1;}
     if((pressed&ORBIS_PAD_BUTTON_OPTIONS)&&s->page==0){refresh_catalogs();show_toast("Catalogs refreshed");return 1;}
     if((pressed&ORBIS_PAD_BUTTON_SQUARE)&&s->page==1){s->discover_series^=1;s->column=0;return 1;}
     if(pressed&ORBIS_PAD_BUTTON_L1){s->page=(s->page+PAGE_COUNT-1)%PAGE_COUNT;s->rail_focus=0;reset_cursor(s);return 1;}
@@ -638,22 +791,48 @@ static int route_input(AppState *s,uint32_t pressed){
     if(s->rail_focus){if((pressed&ORBIS_PAD_BUTTON_UP)&&s->row>0)--s->row;if((pressed&ORBIS_PAD_BUTTON_DOWN)&&s->row<PAGE_COUNT-1)++s->row;
         if(pressed&(ORBIS_PAD_BUTTON_RIGHT|ORBIS_PAD_BUTTON_CROSS)){s->page=s->row;s->rail_focus=0;reset_cursor(s);}if(pressed&ORBIS_PAD_BUTTON_CIRCLE){s->rail_focus=0;reset_cursor(s);}return pressed!=0;}
     if(s->page==3){
-        if(pressed&ORBIS_PAD_BUTTON_LEFT){if((s->row%2)==1)--s->row;else{s->rail_focus=1;s->row=s->page;}}
-        if((pressed&ORBIS_PAD_BUTTON_RIGHT)&&(s->row%2)==0)++s->row;
-        if((pressed&ORBIS_PAD_BUTTON_UP)&&s->row>=2)s->row-=2;if((pressed&ORBIS_PAD_BUTTON_DOWN)&&s->row<2)s->row+=2;
+        int total=account_addon_count+2;
+        if(pressed&ORBIS_PAD_BUTTON_LEFT){s->rail_focus=1;s->row=s->page;return 1;}
+        if((pressed&ORBIS_PAD_BUTTON_UP)&&s->row>0)--s->row;
+        if((pressed&ORBIS_PAD_BUTTON_DOWN)&&s->row+1<total)++s->row;
+        if(pressed&ORBIS_PAD_BUTTON_OPTIONS){sync_account_data();save_state(s);show_toast(account_sync_status==2?"Account sources refreshed":"Check account sync");s->row=0;}
         if((pressed&ORBIS_PAD_BUTTON_CROSS)&&s->row==1){public_domain_enabled^=1;save_account();validate_public_domain();show_toast(public_domain_enabled?"Public Domain enabled":"Public Domain disabled");}
         if(pressed&ORBIS_PAD_BUTTON_CIRCLE){s->page=0;reset_cursor(s);}return pressed!=0;
     }
+
     if(pressed&ORBIS_PAD_BUTTON_LEFT){if(s->page==2&&s->column==0&&s->library_page>0){--s->library_page;s->column=4;}else if(s->column>0&&s->page<3)--s->column;else{s->rail_focus=1;s->row=s->page;}}
-    if((pressed&ORBIS_PAD_BUTTON_RIGHT)&&s->page<3){if(s->page==2&&s->column==4&&saved_index((s->library_page+1)*5)>=0){++s->library_page;s->column=0;}else if(s->column<4&&saved_index(s->page==2?s->library_page*5+s->column+1:s->column+1)>=0)++s->column;}
+    if((pressed&ORBIS_PAD_BUTTON_RIGHT)&&s->page<3){if(s->page==2&&s->column==4&&saved_index((s->library_page+1)*5)>=0){++s->library_page;s->column=0;}else if(s->column<4&&(s->page!=2||saved_index(s->library_page*5+s->column+1)>=0))++s->column;}
     if(pressed&ORBIS_PAD_BUTTON_UP){if((s->page==0||s->page>=3)&&s->row>0)--s->row;}
     if(pressed&ORBIS_PAD_BUTTON_DOWN){if(s->page==0&&s->row<1){++s->row;if(s->column>3)s->column=3;}else if(s->page==3&&s->row<3)++s->row;else if(s->page==4&&s->row<5)++s->row;}
-    if((pressed&ORBIS_PAD_BUTTON_CROSS)&&s->page==4){if(s->row==5){s->account=1;if(!auth_key[0]&&!link_code[0])create_device_link();}else{s->settings[s->row]^=1;save_state(s);show_toast(s->settings[s->row]?"Setting enabled":"Setting disabled");}}
-    else if((pressed&ORBIS_PAD_BUTTON_CROSS)&&catalog_status==2&&s->page<3){
+    if((pressed&ORBIS_PAD_BUTTON_CROSS)&&s->page==4){if(s->row==5){s->account=1;if(!auth_key[0]&&!link_code[0])create_device_link();}else if(s->row<4){show_toast("This feature is not ported yet");}else{s->settings[s->row]^=1;save_state(s);show_toast(s->settings[s->row]?"Setting enabled":"Setting disabled");}}
+    else if((pressed&ORBIS_PAD_BUTTON_CROSS)&&(catalog_status==2||s->page==2)&&s->page<3){
         int index=s->page==0?s->row*5+s->column:s->page==2?saved_index(s->library_page*5+s->column):s->column+(s->page==1&&s->discover_series?5:0);
         if(index>=0&&index<CARD_CAPACITY&&live_cards[index].name[0]){s->detail_index=index;load_metadata(&live_cards[index]);s->detail=1;}
     }
     if(pressed&ORBIS_PAD_BUTTON_CIRCLE){if(s->page!=0){s->page=0;reset_cursor(s);}else return -1;}return pressed!=0;
+}
+/* Only the worker mutates network/catalog state while a job is active.
+ * The main thread presents a cached framebuffer; it must not render live data
+ * until the acquire/join handoff completes. Fonts and bundled icons are immutable. */
+static struct {pthread_t thread;AppState state;uint32_t pressed;int initial,done,result,active;} job;
+static void *run_job(void *unused){
+    (void)unused;
+    if(job.initial){load_live_catalog();validate_public_domain();if(auth_key[0])sync_account_data();save_state(&job.state);job.result=1;}
+    else job.result=route_input(&job.state,job.pressed);
+    if(job.state.page==2&&!job.state.detail&&!job.state.search)prepare_library_page(job.state.library_page);
+    __atomic_store_n(&job.done,1,__ATOMIC_RELEASE);return 0;
+}
+static int begin_job(const AppState *state,uint32_t pressed,int initial){
+    job.state=*state;job.pressed=pressed;job.initial=initial;job.result=0;
+    __atomic_store_n(&network_cancel,0,__ATOMIC_RELEASE);__atomic_store_n(&job.done,0,__ATOMIC_RELEASE);
+    pthread_attr_t attr;pthread_attr_init(&attr);pthread_attr_setstacksize(&attr,2*1024*1024);
+    int r=pthread_create(&job.thread,&attr,run_job,0);pthread_attr_destroy(&attr);job.active=r==0;return job.active;
+}
+static void draw_busy(void *b,unsigned ticks){
+    draw_round_rect(b,510,440,900,180,32,SURFACE);
+    draw_text(b,570,480,__atomic_load_n(&network_cancel,__ATOMIC_ACQUIRE)?"Cancelling remaining requests...":"Loading...",5,INK);
+    draw_text(b,570,555,"Circle cancels after the current request",3,INK_2);
+    draw_round_rect(b,560+(int)(ticks%60)*12,603,90,5,2,ACCENT_SOFT);
 }
 int main(void){
     const size_t frame_size=(size_t)WIDTH*HEIGHT*4,alignment=0x200000;
@@ -665,18 +844,59 @@ int main(void){
     void *buffers[BUFFER_COUNT]={video_memory,(uint8_t*)video_memory+frame_size};void *canvas=malloc(frame_size);if(!canvas)park_error("malloc canvas",-1);OrbisVideoOutBufferAttribute attribute;
     sceVideoOutSetBufferAttribute(&attribute,0x80000000,1,0,WIDTH,HEIGHT,WIDTH);
     result=sceVideoOutRegisterBuffers(video,0,buffers,BUFFER_COUNT,&attribute);if(result<0)park_error("sceVideoOutRegisterBuffers",result);
-    load_assets();AppState state={0};for(int i=0;i<5;++i)state.settings[i]=1;load_state(&state);load_account();catalog_status=1;
+    load_assets();AppState state={0};for(int i=0;i<5;++i)state.settings[i]=1;load_state(&state);load_library_cache();load_account();pj_progress_load("/data/stremio-ps4-progress.json");catalog_status=1;
     draw_screen(canvas,&state);memcpy(buffers[0],canvas,frame_size);memcpy(buffers[1],canvas,frame_size);sceVideoOutSetFlipRate(video,0);
     result=sceVideoOutSubmitFlip(video,0,ORBIS_VIDEO_OUT_FLIP_VSYNC,1);if(result<0)park_error("sceVideoOutSubmitFlip",result);
     sceSystemServiceHideSplashScreen();
-    load_live_catalog();validate_public_domain();if(auth_key[0])sync_account_data();draw_screen(canvas,&state);memcpy(buffers[1],canvas,frame_size);sceVideoOutSubmitFlip(video,1,ORBIS_VIDEO_OUT_FLIP_VSYNC,2);
     const int pad=open_pad();if(pad<0)park_error("scePadOpen",pad);
-    int active_buffer=1;int64_t flip_id=3;uint32_t previous_buttons=0;
-    for(;;){OrbisPadData input={0};if(scePadReadState(pad,&input)==0){uint32_t pressed=input.buttons&~previous_buttons;previous_buttons=input.buttons;
-        int changed=route_input(&state,pressed);if(changed<0){scePadClose(pad);sceSystemServiceLoadExec("exit",0);}if(changed>0)animation_frames=7;
-        int toast_expired=0;if(toast_frames>0){--toast_frames;if(toast_frames==0)toast_expired=1;}
-        if(changed>0||animation_frames>0||toast_expired){if(animation_frames>0)--animation_frames;++ui_phase;struct timespec now;if(clock_gettime(CLOCK_MONOTONIC,&now)==0){uint64_t ns=(uint64_t)now.tv_sec*1000000000ull+(uint64_t)now.tv_nsec;
-                if(last_flip_ns&&ns>last_flip_ns&&ns-last_flip_ns<500000000ull){float ms=(float)(ns-last_flip_ns)/1000000.0f;measured_frame_ms=measured_frame_ms?measured_frame_ms*0.7f+ms*0.3f:ms;measured_fps=1000.0f/measured_frame_ms;}last_flip_ns=ns;}
-            active_buffer^=1;draw_screen(canvas,&state);memcpy(buffers[active_buffer],canvas,frame_size);sceVideoOutSubmitFlip(video,active_buffer,ORBIS_VIDEO_OUT_FLIP_VSYNC,flip_id++);}}
-        sceKernelUsleep(16000);}
+    int active_buffer=0;int64_t flip_id=2;uint32_t previous_buttons=0;unsigned busy_ticks=0;
+    if(!begin_job(&state,0,1))park_error("Network worker unavailable",-1);
+    for(;;){
+        struct timespec tick;clock_gettime(CLOCK_MONOTONIC,&tick);uint64_t start_us=(uint64_t)tick.tv_sec*1000000+tick.tv_nsec/1000;
+        OrbisPadData input={0};uint32_t pressed=0;
+        if(scePadReadState(pad,&input)==0){pressed=input.buttons&~previous_buttons;previous_buttons=input.buttons;}
+        int changed=0,new_video=0,toast_expired=0,busy_frame=0;
+        if(job.active){
+            if(pressed&ORBIS_PAD_BUTTON_CIRCLE)__atomic_store_n(&network_cancel,1,__ATOMIC_RELEASE);
+            if(__atomic_load_n(&job.done,__ATOMIC_ACQUIRE)){
+                pthread_join(job.thread,0);state=job.state;changed=job.result;job.active=0;busy_ticks=0;
+                if(__atomic_load_n(&network_cancel,__ATOMIC_ACQUIRE)){show_toast("Request cancelled");changed=1;}
+            }else {++busy_ticks;if(busy_ticks>8)busy_frame=1;}
+        }else if(pressed){
+            if(state.playing)changed=route_input(&state,pressed);
+            else if(!begin_job(&state,pressed,0)){show_toast("Unable to start background task");changed=1;}
+        }
+        if(!job.active){
+            if(changed<0){playback_close();scePadClose(pad);sceSystemServiceLoadExec("exit",0);}
+            if(changed>0)animation_frames=7;
+            if(state.playing){
+                new_video=playback_video(video_canvas,WIDTH,HEIGHT);PlaybackStatus ps=playback_status();
+                if(ps.position_ms>progress_saved_ms+10000)save_playback_progress(&state);
+                if(ps.ended){save_playback_progress(&state);playback_close();state.playing=0;changed=1;show_toast("Playback finished");}
+                if(playback_controls)--playback_controls;
+            }
+            if(toast_frames>0){--toast_frames;if(!toast_frames)toast_expired=1;}
+        }
+        if(busy_frame||(!job.active&&(changed>0||animation_frames>0||toast_expired||new_video||state.playing))){
+            if(busy_frame)draw_busy(canvas,busy_ticks);
+            else {
+                if(animation_frames>0)--animation_frames;++ui_phase;
+                struct timespec now;if(clock_gettime(CLOCK_MONOTONIC,&now)==0){
+                    uint64_t ns=(uint64_t)now.tv_sec*1000000000ull+(uint64_t)now.tv_nsec;
+                    if(last_flip_ns&&ns>last_flip_ns&&ns-last_flip_ns<500000000ull){
+                        float ms=(float)(ns-last_flip_ns)/1000000.0f;
+                        measured_frame_ms=measured_frame_ms?measured_frame_ms*0.7f+ms*0.3f:ms;measured_fps=1000.0f/measured_frame_ms;
+                    }last_flip_ns=ns;
+                }
+                draw_screen(canvas,&state);
+            }
+            unsigned waits=0;while(sceVideoOutIsFlipPending(video)>0&&waits++<2000)sceKernelUsleep(1000);
+            if(waits>=2000)park_error("VideoOut flip timeout",-1);
+            active_buffer^=1;memcpy(buffers[active_buffer],canvas,frame_size);
+            result=sceVideoOutSubmitFlip(video,active_buffer,ORBIS_VIDEO_OUT_FLIP_VSYNC,flip_id++);
+            if(result<0)park_error("sceVideoOutSubmitFlip",result);
+        }
+        clock_gettime(CLOCK_MONOTONIC,&tick);uint64_t elapsed=(uint64_t)tick.tv_sec*1000000+tick.tv_nsec/1000-start_us;
+        if(elapsed<16667)sceKernelUsleep((unsigned)(16667-elapsed));
+    }
 }

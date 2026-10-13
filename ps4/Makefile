@@ -46,11 +46,12 @@ endif
 
 ifeq ($(BUILD_MODE),videoout)
 TITLE       := Stremio PS4
-VERSION     := 0.30
+VERSION     := 0.31
 SOURCE      := videoout/main.c
 OBJECT      := $(OBJDIR)/videoout.o
+EXTRA_OBJECTS := $(OBJDIR)/protocol.o $(OBJDIR)/stremio.o $(OBJDIR)/util.o $(OBJDIR)/playback.o $(OBJDIR)/video_convert.o
 LIBS        := -lc -lm -lkernel -lSceVideoOut -lSceSystemService -lScePad -lSceUserService \
-	-lSceNet -lSceSsl -lSceHttp -lSceSysmodule
+	-lSceNet -lSceSsl -lSceHttp -lSceSysmodule -lSceAudioOut -lc++
 EXTRAFLAGS  := -O2 -DPLATFORM_PS4=1
 FSELF_FLAGS := --paid 0x3800000000000011
 endif
@@ -73,8 +74,8 @@ endif
 TOOLS       := $(TOOLCHAIN)/bin/$(HOST)
 CFLAGS      := --target=x86_64-pc-freebsd12-elf -fPIC -funwind-tables -c \
 	$(EXTRAFLAGS) -isysroot $(TOOLCHAIN) -isystem $(TOOLCHAIN)/include -I$(ROOT) -I$(ROOT)/src
-CXXFLAGS    := $(CFLAGS) -isystem $(TOOLCHAIN)/include/c++/v1
-LDFLAGS     := -m elf_x86_64 -pie --script $(TOOLCHAIN)/link.x --eh-frame-hdr \
+CXXFLAGS    := $(CFLAGS) -D_GNU_SOURCE -isystem $(TOOLCHAIN)/include/c++/v1
+LDFLAGS     := -m elf_x86_64 -pie --gc-sections --script $(TOOLCHAIN)/link.x --eh-frame-hdr \
 	-L$(TOOLCHAIN)/lib $(LIBS) $(TOOLCHAIN)/lib/crt1.o
 PKG         := $(DIST)/$(CONTENT_ID).pkg
 
@@ -88,11 +89,26 @@ check-toolchain:
 $(OBJDIR):
 	mkdir -p $@
 
-$(OBJECT): $(SOURCE) | $(OBJDIR)
+$(OBJECT): $(SOURCE) videoout/protocol.h videoout/playback.h | $(OBJDIR)
 	$(if $(filter %.c,$<),$(CC),$(CCX)) $(if $(filter %.c,$<),$(CFLAGS),$(CXXFLAGS)) -o $@ $<
 
-$(BUILD)/bootstrap.elf: $(OBJECT)
-	$(LD) $< -o $@ $(LDFLAGS)
+$(OBJDIR)/protocol.o: videoout/protocol.cpp videoout/protocol.h | $(OBJDIR)
+	$(CCX) $(CXXFLAGS) -std=c++17 -fexceptions -ffunction-sections -fdata-sections -I$(ROOT)/third_party -o $@ $<
+
+$(OBJDIR)/playback.o: videoout/playback.c videoout/playback.h videoout/avplayer_abi.h | $(OBJDIR)
+	$(CC) $(CFLAGS) -o $@ $<
+
+$(OBJDIR)/video_convert.o: videoout/video_convert.c videoout/playback.h | $(OBJDIR)
+	$(CC) $(CFLAGS) -o $@ $<
+
+$(OBJDIR)/stremio.o: $(ROOT)/src/stremio.cpp | $(OBJDIR)
+	$(CCX) $(CXXFLAGS) -std=c++17 -fexceptions -ffunction-sections -fdata-sections -I$(ROOT)/third_party -o $@ $<
+
+$(OBJDIR)/util.o: $(ROOT)/src/util.cpp | $(OBJDIR)
+	$(CCX) $(CXXFLAGS) -std=c++17 -fexceptions -ffunction-sections -fdata-sections -I$(ROOT)/third_party -o $@ $<
+
+$(BUILD)/bootstrap.elf: $(OBJECT) $(EXTRA_OBJECTS)
+	$(LD) $^ -o $@ $(LDFLAGS)
 
 $(BUILD)/eboot.bin: $(BUILD)/bootstrap.elf
 	$(TOOLS)/create-fself -in=$< -out=$(BUILD)/bootstrap.oelf \

@@ -48,6 +48,14 @@ collection services, with automatic library/addon import, native sync status,
 cloud-saved title merging, and manual account resync.
 Version 0.30 imports linked-account titles as complete native Library cards with
 poster artwork, duplicate merging, expanded card capacity and page navigation.
+Version 0.31 is the first playback-integration milestone. It shares the PS5
+client's addon/resource and stream parsers, resolves linked-account addon
+streams, opens compatible direct HTTP(S) media through PS4 AVPlayer, outputs
+stereo PCM, converts decoded NV12 into the stable VideoOut path, supports
+pause/seeking/resume positions, persists full Library cards offline, and moves
+blocking network work away from the render loop. Real-console testing is still
+required. Torrents, subtitles, track selection, autoplay and interface sounds
+remain unported and are visibly marked unavailable.
 
 The upstream PS5 documentation is retained below while features are moved to
 the PS4 platform layer. PS5 installation instructions and artifacts do not

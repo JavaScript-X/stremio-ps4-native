@@ -133,8 +133,18 @@ Options-button resync from the account screen.
 Version 0.30 expands that integration from matching catalog entries to native
 cards for the linked account's library. It imports title identity, type, name
 and poster artwork, merges duplicates with live Cinemeta results, supports up to
-40 in-memory titles, and adds multi-page Library navigation. The heap budget is
+512 account titles, and adds multi-page Library navigation. The heap budget is
 raised for the larger decoded-artwork set while retaining the fast 0.28 canvas.
+
+Version 0.31 integrates the upstream PS5 Stremio protocol model into the PS4
+frontend: manifest capability checks, resource URLs, robust JSON and the stream
+parser. Linked-account addons can return direct HTTP(S) sources. An on-demand
+PS4 AVPlayer backend handles decoded NV12 video and stereo PCM audio without a
+launch-time dependency. Pause, seeking and saved resume positions are wired.
+Library metadata is cached atomically, artwork is lazy-loaded, and network work
+runs outside the render loop with a cancellable busy view. This is a hardware-
+test milestone. Torrents, subtitles, track selection, autoplay, UI sounds, PS4
+IME search and cloud-library writes are not yet ported.
 
 The output is `dist-ps4/IV0000-BREW00991_00-STREMIOPS4000000.pkg`.
 The current package is a native 1080p VideoOut application using DualShock 4

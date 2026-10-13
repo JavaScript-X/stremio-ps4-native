@@ -67,3 +67,16 @@ firmware 13.02 with GoldHEN 2.4b18.12. The loader probe and direct 1080p
 a frame in that environment, so the PS4 renderer will use VideoOut (or an
 OpenGNM backend built on it), not Piglet. The existing PS5 HUI renderer is not
 connected to this backend yet.
+
+## Current integration checkpoint (0.31)
+
+The PS4 build now compiles the upstream `src/stremio.cpp` addon and stream
+model behind a small C boundary. Direct links enter an on-demand AVPlayer
+backend; allocation, audio, lifecycle, seek and frame-conversion paths have
+host-side sanitizer tests. Network operations run outside the render loop and
+Library records persist independently of the current catalog.
+
+No unchecked matrix row is considered passed by compilation alone. Direct
+media needs codec/container testing on both PS4 models. Torrent, FFmpeg fallback,
+subtitle, audio-track, IME, sound and suspend integrations still need PS4
+platform implementations.
