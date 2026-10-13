@@ -46,6 +46,8 @@ VideoOut upload and fast-paths opaque poster pixels, addressing the measured
 Version 0.29 connects linked accounts to the Stremio datastore and addon
 collection services, with automatic library/addon import, native sync status,
 cloud-saved title merging, and manual account resync.
+Version 0.30 imports linked-account titles as complete native Library cards with
+poster artwork, duplicate merging, expanded card capacity and page navigation.
 
 The upstream PS5 documentation is retained below while features are moved to
 the PS4 platform layer. PS5 installation instructions and artifacts do not

@@ -26,15 +26,15 @@
 #define STB_TRUETYPE_IMPLEMENTATION
 #include "third_party/hui/third_party/stb/stb_truetype.h"
 
-uint64_t sceLibcHeapSize = 24 * 1024 * 1024;
-enum { WIDTH = 1920, HEIGHT = 1080, BUFFER_COUNT = 2, PAGE_COUNT = 5 };
+uint64_t sceLibcHeapSize = 64 * 1024 * 1024;
+enum { WIDTH = 1920, HEIGHT = 1080, BUFFER_COUNT = 2, PAGE_COUNT = 5, CARD_CAPACITY = 40, CLOUD_CARD_START = 15 };
 static const uint32_t GROUND=0xff110b0cu, SURFACE=0xff292328u, SURFACE_HI=0xff3a333du;
 static const uint32_t ACCENT=0xfff55b7bu, ACCENT_SOFT=0xffff8ba5u;
 static const uint32_t INK=0xfff7f7f7u, INK_2=0xffc8c8c8u, INK_3=0xff8f8f8fu;
 typedef struct Image { unsigned char *pixels; int width, height; } Image;
 typedef struct AppState {
     int page, rail_focus, row, column, search, detail, streams, episodes, detail_index;
-    int keyboard, search_cursor, result_focus, discover_series, account, stream_cursor, episode_cursor, season; char query[24]; int settings[5];
+    int keyboard, search_cursor, result_focus, discover_series, account, stream_cursor, episode_cursor, season, library_page; char query[24]; int settings[5];
 } AppState;
 static const char *PAGE_NAMES[PAGE_COUNT]={"Board","Discover","Library","Addons","Settings"};
 static const char *ICON_NAMES[PAGE_COUNT]={"nav_board","nav_discover","nav_library","nav_addons","nav_settings"};
@@ -48,14 +48,14 @@ typedef struct CatalogCard {
     char id[24], name[40], type[12], year[16], runtime[24], rating[12], genres[96];
     char description[640], poster_url[384]; Image poster; int saved, metadata_loaded;
 } CatalogCard;
-static CatalogCard live_cards[15];
+static CatalogCard live_cards[CARD_CAPACITY];
 typedef struct StreamSource {char name[32],title[96],info_hash[64];int file_index;} StreamSource;
 static StreamSource stream_sources[8];static int stream_count,stream_status;
 typedef struct Episode {char id[40],name[64],description[256];int season,number;} Episode;
 static Episode episodes[80];static int episode_count,max_season;static char episode_series_id[24],selected_video_id[40];
 static int catalog_count;
 static int search_count, search_status;
-static char saved_ids[15][24];static int saved_id_count;
+static char saved_ids[CARD_CAPACITY][24];static int saved_id_count,cloud_card_count;
 static int catalog_status;
 static int poster_count;
 static int net_pool, ssl_context, http_context;
@@ -64,14 +64,14 @@ static int account_status, public_domain_enabled=1, public_domain_online;
 static int account_sync_status,account_addon_count;
 
 static int id_saved(const char *id){for(int i=0;i<saved_id_count;++i)if(!strcmp(saved_ids[i],id))return 1;return 0;}
-static void apply_saved(void){for(int i=0;i<15;++i)if(live_cards[i].id[0])live_cards[i].saved=id_saved(live_cards[i].id);}
+static void apply_saved(void){for(int i=0;i<CARD_CAPACITY;++i)if(live_cards[i].id[0])live_cards[i].saved=id_saved(live_cards[i].id);}
 static void load_state(AppState *s){
     FILE *f=fopen("/data/stremio-ps4.cfg","r");if(!f)return;char line[128];
     if(fgets(line,sizeof(line),f))sscanf(line,"%d %d %d %d %d",&s->settings[0],&s->settings[1],&s->settings[2],&s->settings[3],&s->settings[4]);
-    while(saved_id_count<15&&fgets(line,sizeof(line),f)){line[strcspn(line,"\r\n")]=0;if(line[0])strncpy(saved_ids[saved_id_count++],line,23);}fclose(f);
+    while(saved_id_count<CARD_CAPACITY&&fgets(line,sizeof(line),f)){line[strcspn(line,"\r\n")]=0;if(line[0])strncpy(saved_ids[saved_id_count++],line,23);}fclose(f);
 }
 static void save_state(const AppState *s){
-    saved_id_count=0;for(int i=0;i<15&&saved_id_count<15;++i)if(live_cards[i].saved&&live_cards[i].id[0])strncpy(saved_ids[saved_id_count++],live_cards[i].id,23);
+    saved_id_count=0;for(int i=0;i<CARD_CAPACITY&&saved_id_count<CARD_CAPACITY;++i)if(live_cards[i].saved&&live_cards[i].id[0])strncpy(saved_ids[saved_id_count++],live_cards[i].id,23);
     FILE *f=fopen("/data/stremio-ps4.cfg","w");if(!f)return;fprintf(f,"%d %d %d %d %d\n",s->settings[0],s->settings[1],s->settings[2],s->settings[3],s->settings[4]);
     for(int i=0;i<saved_id_count;++i)fprintf(f,"%s\n",saved_ids[i]);fclose(f);
 }
@@ -162,8 +162,12 @@ static void sync_account_data(void){
     snprintf(body,sizeof(body),"{\"authKey\":\"%s\",\"collection\":\"libraryItem\",\"ids\":[],\"all\":true}",auth_key);
     unsigned char *json=http_post_json("https://api.strem.io/api/datastoreGet",body,2*1024*1024,&size);
     if(!json){account_sync_status=3;return;}const char *p=(char*)json;saved_id_count=0;
-    while(saved_id_count<15&&(p=strstr(p,"\"_id\":\""))){char id[24]={0};const char *next=json_value(p,"\"_id\":\"",id,sizeof(id),0);const char *removed=strstr(p,"\"removed\":true");if(id[0]&&(!removed||removed>next))strncpy(saved_ids[saved_id_count++],id,23);p=next?next:p+7;}
-    free(json);apply_saved();
+    for(int i=CLOUD_CARD_START;i<CARD_CAPACITY;++i){if(live_cards[i].poster.pixels)stbi_image_free(live_cards[i].poster.pixels);memset(&live_cards[i],0,sizeof(live_cards[i]));}cloud_card_count=0;
+    while(saved_id_count<CARD_CAPACITY&&(p=strstr(p,"\"_id\":\""))){char id[24]={0};const char *next=json_value(p,"\"_id\":\"",id,sizeof(id),0);const char *object_end=strstr(next,"\"_id\":\"");const char *removed=strstr(p,"\"removed\":true");if(id[0]&&(!removed||(object_end&&removed>object_end))){strncpy(saved_ids[saved_id_count++],id,23);
+            int duplicate=0;for(int i=0;i<CLOUD_CARD_START;++i)if(!strcmp(live_cards[i].id,id)){duplicate=1;break;}if(!duplicate&&CLOUD_CARD_START+cloud_card_count<CARD_CAPACITY){CatalogCard *card=&live_cards[CLOUD_CARD_START+cloud_card_count++];strncpy(card->id,id,sizeof(card->id)-1);card->saved=1;const char *v;
+                if((v=strstr(p,"\"name\":\""))&&(!object_end||v<object_end))json_value(v,"\"name\":\"",card->name,sizeof(card->name),0);if((v=strstr(p,"\"type\":\""))&&(!object_end||v<object_end))json_value(v,"\"type\":\"",card->type,sizeof(card->type),1);if((v=strstr(p,"\"poster\":\""))&&(!object_end||v<object_end))json_value(v,"\"poster\":\"",card->poster_url,sizeof(card->poster_url),0);}}
+        p=next?next:p+7;}
+    free(json);apply_saved();for(int i=CLOUD_CARD_START;i<CLOUD_CARD_START+cloud_card_count&&i<CARD_CAPACITY;++i){CatalogCard *card=&live_cards[i];if(!card->name[0])strncpy(card->name,card->id,sizeof(card->name)-1);if(card->poster_url[0]){size_t image_size=0;if(strlen(card->poster_url)+4<sizeof(card->poster_url))strcat(card->poster_url,".jpg");unsigned char *encoded=http_get(card->poster_url,3*1024*1024,&image_size);if(encoded){int channels=0;card->poster.pixels=stbi_load_from_memory(encoded,(int)image_size,&card->poster.width,&card->poster.height,&channels,4);free(encoded);}}}
     snprintf(body,sizeof(body),"{\"type\":\"AddonCollectionGet\",\"authKey\":\"%s\",\"update\":true}",auth_key);
     json=http_post_json("https://api.strem.io/api/addonCollectionGet",body,2*1024*1024,&size);account_addon_count=0;
     if(json){p=(char*)json;while((p=strstr(p,"\"transportUrl\""))){++account_addon_count;p+=14;}free(json);}
@@ -272,7 +276,7 @@ static void load_stream_sources(CatalogCard *card){
         ++stream_count;p=next?next:p+12;}
     free(json);stream_status=stream_count?2:3;
 }
-static int saved_index(int slot){int found=0;for(int i=0;i<15;++i)if(live_cards[i].saved&&live_cards[i].name[0]){if(found==slot)return i;++found;}return -1;}
+static int saved_index(int slot){int found=0;for(int i=0;i<CARD_CAPACITY;++i)if(live_cards[i].saved&&live_cards[i].name[0]){if(found==slot)return i;++found;}return -1;}
 
 static void park_error(const char *message,int code){
     sceKernelDebugOutText(0,"[stremio-ps4] %s: 0x%08x\n",message,(unsigned)code);
@@ -390,10 +394,10 @@ static void draw_card(void *b,int x,int y,int w,int h,int seed,int focused,const
     int grow=focused?4+animation_frames/5:0;if(grow){x-=grow;y-=grow;w+=grow*2;h+=grow*2;}
     static const uint32_t colors[]={0xff49325fu,0xff41305au,0xff34284du,0xff3d2d55u,0xff2c2342u};int poster_h=h-58;
     draw_round_rect(b,x+8,y+14,w,poster_h,20,0xff050405u);draw_round_rect(b,x,y,w,poster_h,18,colors[seed%5]);
-    if(seed<15&&live_cards[seed].poster.pixels)draw_image_rounded(b,&live_cards[seed].poster,x,y,w,poster_h,18);
+    if(seed<CARD_CAPACITY&&live_cards[seed].poster.pixels)draw_image_rounded(b,&live_cards[seed].poster,x,y,w,poster_h,18);
     char shown[21]={0};strncpy(shown,title,sizeof(shown)-1);int scale=strlen(shown)>12?2:3;
     draw_text(b,x,y+poster_h+20,shown,scale,focused?INK:INK_2);if(focused)draw_focus(b,x,y,w,poster_h);
-    if(seed<15&&live_cards[seed].saved){draw_round_rect(b,x+w-48,y+12,36,36,18,0xff65b322u);draw_image(b,&check_small_icon,x+w-40,y+20,20,20);}
+    if(seed<CARD_CAPACITY&&live_cards[seed].saved){draw_round_rect(b,x+w-48,y+12,36,36,18,0xff65b322u);draw_image(b,&check_small_icon,x+w-40,y+20,20,20);}
 }
 static void draw_rail(void *b,const AppState *s){
     draw_vgradient(b,0,0,140,HEIGHT,0xff211724u,0xff100d12u);if(logo.pixels)draw_image(b,&logo,40,28,60,60);else draw_text(b,36,42,"S",7,ACCENT_SOFT);
@@ -432,10 +436,10 @@ static void draw_discover(void *b,const AppState *s){
     draw_image(b,&square_icon,190,800,38,38);draw_text(b,244,810,"SWITCH MOVIES SERIES",3,INK_3);
 }
 static void draw_library(void *b,const AppState *s){
-    draw_text(b,190,154,"Library",6,INK_2);int count=0;for(int i=0;i<15;++i)if(live_cards[i].saved&&live_cards[i].name[0])++count;
+    draw_text(b,190,154,"Library",6,INK_2);int count=0;for(int i=0;i<CARD_CAPACITY;++i)if(live_cards[i].saved&&live_cards[i].name[0])++count;
     char summary[64];snprintf(summary,sizeof(summary),"%d saved title%s",count,count==1?"":"s");draw_text(b,190,210,summary,3,INK_3);
     const char *filters[]={"All","Movies","Series"};for(int i=0;i<3;++i){draw_round_rect(b,190+i*210,252,190,54,27,i==0?0xff563aa7u:SURFACE);draw_text(b,225+i*210,268,filters[i],3,INK);}
-    int shown=0;for(int i=0;i<5;++i){int index=saved_index(i);if(index<0)break;draw_card(b,190+i*290,350,250,360,index,!s->rail_focus&&s->column==i,live_cards[index].name);++shown;}
+    int shown=0;for(int i=0;i<5;++i){int index=saved_index(s->library_page*5+i);if(index<0)break;draw_card(b,190+i*290,350,250,360,index,!s->rail_focus&&s->column==i,live_cards[index].name);++shown;}if(count>5){char page[40];snprintf(page,sizeof(page),"PAGE %d OF %d",s->library_page+1,(count+4)/5);draw_round_rect(b,1450,260,250,50,25,SURFACE);draw_text(b,1490,275,page,2,INK_2);}
     if(!shown){draw_round_rect(b,190,350,1100,190,30,SURFACE);draw_text(b,250,405,"Your library is empty",4,INK);draw_text(b,250,462,"Save any title with Square",3,INK_3);}
     draw_round_rect(b,190,805,500,64,32,SURFACE_HI);draw_image(b,&check_icon,212,818,36,36);draw_text(b,266,824,"Saved locally on PS4",3,INK_2);
 }
@@ -483,7 +487,7 @@ static void draw_wrapped(void *b,int x,int y,const char *text,int columns,int li
         p+=n;while(*p==' ')++p;}
 }
 static void draw_detail(void *b,const AppState *s){
-    int index=s->detail_index;if(index<0||index>=15||!live_cards[index].name[0])return;CatalogCard *card=&live_cards[index];
+    int index=s->detail_index;if(index<0||index>=CARD_CAPACITY||!live_cards[index].name[0])return;CatalogCard *card=&live_cards[index];
     draw_text(b,190,140,"TITLE DETAILS",5,ACCENT_SOFT);
     draw_round_rect(b,190,220,360,540,24,SURFACE);if(card->poster.pixels)draw_image_rounded(b,&card->poster,190,220,360,540,24);
     char title[41]={0};strncpy(title,card->name,sizeof(title)-1);if(hero_logo.pixels)draw_image(b,&hero_logo,610,205,470,90);else draw_text(b,610,230,title,strlen(title)>22?3:5,INK);
@@ -570,7 +574,7 @@ static int open_pad(void){
     result=sceUserServiceInitialize(&p);if(result!=0&&result!=(int)0x80960003)return result;int user=-1;
     result=sceUserServiceGetInitialUser(&user);if(result!=0)return result;return scePadOpen(user,0,0,0);
 }
-static void reset_cursor(AppState *s){s->row=0;s->column=0;}
+static void reset_cursor(AppState *s){s->row=0;s->column=0;s->library_page=0;}
 static int route_input(AppState *s,uint32_t pressed){
     if(s->account){
         if(pressed&ORBIS_PAD_BUTTON_CIRCLE)s->account=0;
@@ -640,14 +644,14 @@ static int route_input(AppState *s,uint32_t pressed){
         if((pressed&ORBIS_PAD_BUTTON_CROSS)&&s->row==1){public_domain_enabled^=1;save_account();validate_public_domain();show_toast(public_domain_enabled?"Public Domain enabled":"Public Domain disabled");}
         if(pressed&ORBIS_PAD_BUTTON_CIRCLE){s->page=0;reset_cursor(s);}return pressed!=0;
     }
-    if(pressed&ORBIS_PAD_BUTTON_LEFT){if(s->column>0&&s->page<3)--s->column;else{s->rail_focus=1;s->row=s->page;}}
-    if((pressed&ORBIS_PAD_BUTTON_RIGHT)&&s->page<3&&s->column<4)++s->column;
+    if(pressed&ORBIS_PAD_BUTTON_LEFT){if(s->page==2&&s->column==0&&s->library_page>0){--s->library_page;s->column=4;}else if(s->column>0&&s->page<3)--s->column;else{s->rail_focus=1;s->row=s->page;}}
+    if((pressed&ORBIS_PAD_BUTTON_RIGHT)&&s->page<3){if(s->page==2&&s->column==4&&saved_index((s->library_page+1)*5)>=0){++s->library_page;s->column=0;}else if(s->column<4&&saved_index(s->page==2?s->library_page*5+s->column+1:s->column+1)>=0)++s->column;}
     if(pressed&ORBIS_PAD_BUTTON_UP){if((s->page==0||s->page>=3)&&s->row>0)--s->row;}
     if(pressed&ORBIS_PAD_BUTTON_DOWN){if(s->page==0&&s->row<1){++s->row;if(s->column>3)s->column=3;}else if(s->page==3&&s->row<3)++s->row;else if(s->page==4&&s->row<5)++s->row;}
     if((pressed&ORBIS_PAD_BUTTON_CROSS)&&s->page==4){if(s->row==5){s->account=1;if(!auth_key[0]&&!link_code[0])create_device_link();}else{s->settings[s->row]^=1;save_state(s);show_toast(s->settings[s->row]?"Setting enabled":"Setting disabled");}}
     else if((pressed&ORBIS_PAD_BUTTON_CROSS)&&catalog_status==2&&s->page<3){
-        int index=s->page==0?s->row*5+s->column:s->page==2?saved_index(s->column):s->column+(s->page==1&&s->discover_series?5:0);
-        if(index>=0&&index<15&&live_cards[index].name[0]){s->detail_index=index;load_metadata(&live_cards[index]);s->detail=1;}
+        int index=s->page==0?s->row*5+s->column:s->page==2?saved_index(s->library_page*5+s->column):s->column+(s->page==1&&s->discover_series?5:0);
+        if(index>=0&&index<CARD_CAPACITY&&live_cards[index].name[0]){s->detail_index=index;load_metadata(&live_cards[index]);s->detail=1;}
     }
     if(pressed&ORBIS_PAD_BUTTON_CIRCLE){if(s->page!=0){s->page=0;reset_cursor(s);}else return -1;}return pressed!=0;
 }

@@ -130,6 +130,12 @@ account addon collection, merges matching saved titles into the native Library,
 shows sync totals, refreshes automatically at startup, and supports an explicit
 Options-button resync from the account screen.
 
+Version 0.30 expands that integration from matching catalog entries to native
+cards for the linked account's library. It imports title identity, type, name
+and poster artwork, merges duplicates with live Cinemeta results, supports up to
+40 in-memory titles, and adds multi-page Library navigation. The heap budget is
+raised for the larger decoded-artwork set while retaining the fast 0.28 canvas.
+
 The output is `dist-ps4/IV0000-BREW00991_00-STREMIOPS4000000.pkg`.
 The current package is a native 1080p VideoOut application using DualShock 4
 navigation and PS4 networking. Firmware 13.02 with GoldHEN 2.4b18.12 is the
