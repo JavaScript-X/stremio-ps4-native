@@ -33,7 +33,7 @@ static const uint32_t INK=0xfff7f7f7u, INK_2=0xffc8c8c8u, INK_3=0xff8f8f8fu;
 typedef struct Image { unsigned char *pixels; int width, height; } Image;
 typedef struct AppState {
     int page, rail_focus, row, column, search, detail, streams, detail_index;
-    int keyboard, search_cursor, result_focus, discover_series, account; char query[24]; int settings[4];
+    int keyboard, search_cursor, result_focus, discover_series, account, stream_cursor; char query[24]; int settings[4];
 } AppState;
 static const char *PAGE_NAMES[PAGE_COUNT]={"Board","Discover","Library","Addons","Settings"};
 static const char *ICON_NAMES[PAGE_COUNT]={"nav_board","nav_discover","nav_library","nav_addons","nav_settings"};
@@ -45,6 +45,8 @@ typedef struct CatalogCard {
     char description[640], poster_url[384]; Image poster; int saved, metadata_loaded;
 } CatalogCard;
 static CatalogCard live_cards[15];
+typedef struct StreamSource {char name[32],title[96],info_hash[64];int file_index;} StreamSource;
+static StreamSource stream_sources[8];static int stream_count,stream_status;
 static int catalog_count;
 static int search_count, search_status;
 static char saved_ids[15][24];static int saved_id_count;
@@ -179,7 +181,10 @@ static void run_search(const char *query){
     char url[320]="https://v3-cinemeta.strem.io/catalog/movie/top/search=";size_t used=strlen(url);
     for(const char *p=query;*p&&used+4<sizeof(url);++p){if(*p==' '){strcpy(url+used,"%20");used+=3;}else url[used++]=*p;}strcpy(url+used,".json");
     size_t size=0;unsigned char *json=http_get(url,1024*1024,&size);if(!json){search_status=3;return;}
-    search_count=parse_catalog((char*)json,10,5);free(json);if(!search_count){search_status=3;return;}
+    int movies=parse_catalog((char*)json,10,3);free(json);
+    strcpy(url,"https://v3-cinemeta.strem.io/catalog/series/top/search=");used=strlen(url);
+    for(const char *p=query;*p&&used+4<sizeof(url);++p){if(*p==' '){strcpy(url+used,"%20");used+=3;}else url[used++]=*p;}strcpy(url+used,".json");
+    json=http_get(url,1024*1024,&size);int series=0;if(json){series=parse_catalog((char*)json,10+movies,5-movies);free(json);}search_count=movies+series;if(!search_count){search_status=3;return;}
     for(int i=0;i<search_count;++i){CatalogCard *card=&live_cards[10+i];size_t image_size=0;
         if(strlen(card->poster_url)+4<sizeof(card->poster_url))strcat(card->poster_url,".jpg");
         unsigned char *encoded=http_get(card->poster_url,3*1024*1024,&image_size);if(encoded){int channels=0;
@@ -201,6 +206,19 @@ static void load_metadata(CatalogCard *card){
     if((v=strstr(p,"\"runtime\":\"")))json_value(v,"\"runtime\":\"",card->runtime,sizeof(card->runtime),1);
     if((v=strstr(p,"\"imdbRating\":\"")))json_value(v,"\"imdbRating\":\"",card->rating,sizeof(card->rating),1);
     parse_genres(p,card->genres,sizeof(card->genres));card->metadata_loaded=1;free(json);
+}
+static void load_stream_sources(CatalogCard *card){
+    stream_count=0;stream_status=1;memset(stream_sources,0,sizeof(stream_sources));
+    if(!public_domain_enabled||!public_domain_online){stream_status=4;return;}char url[512];
+    snprintf(url,sizeof(url),"https://caching.stremio.net/publicdomainmovies.now.sh/stream/%s/%s.json",!strcmp(card->type,"SERIES")?"series":"movie",card->id);
+    size_t size=0;unsigned char *json=http_get(url,512*1024,&size);if(!json){stream_status=5;return;}const char *p=(char*)json;
+    while(stream_count<8&&(p=strstr(p,"\"infoHash\":\""))){StreamSource *source=&stream_sources[stream_count];
+        const char *next=json_value(p,"\"infoHash\":\"",source->info_hash,sizeof(source->info_hash),0);const char *v;
+        if((v=strstr(p,"\"title\":\""))&&(!next||v<next+300))json_value(v,"\"title\":\"",source->title,sizeof(source->title),0);
+        if((v=strstr(p,"\"name\":\""))&&(!next||v<next+300))json_value(v,"\"name\":\"",source->name,sizeof(source->name),0);
+        if((v=strstr(p,"\"fileIdx\":"))&&(!next||v<next+300))source->file_index=atoi(v+10);
+        ++stream_count;p=next?next:p+12;}
+    free(json);stream_status=stream_count?2:3;
 }
 static int saved_index(int slot){int found=0;for(int i=0;i<15;++i)if(live_cards[i].saved&&live_cards[i].name[0]){if(found==slot)return i;++found;}return -1;}
 
@@ -419,12 +437,20 @@ static void draw_detail(void *b,const AppState *s){
 }
 static void draw_streams(void *b,const AppState *s){
     CatalogCard *card=&live_cards[s->detail_index];draw_text(b,190,140,"STREAM SOURCES",6,INK);
-    draw_text(b,190,220,card->name,4,ACCENT_SOFT);draw_round_rect(b,190,300,1420,280,32,SURFACE);
-    if(public_domain_enabled&&public_domain_online){draw_round_rect(b,230,340,84,84,42,0xff315d3fu);draw_image(b,&check_icon,252,362,40,40);
-        draw_text(b,350,360,"No compatible streams found",5,INK);draw_text(b,350,435,"Public Domain was checked for this title",3,INK_2);}
-    else {draw_text(b,250,370,"No stream addon is installed",5,INK);draw_text(b,250,450,"Open Addons to configure a source",3,INK_2);}
-    draw_round_rect(b,250,630,500,82,41,0xff563aa7u);draw_image(b,&cross_icon,278,652,38,38);draw_text(b,340,654,"OPEN ADDONS",4,INK);
-    draw_image(b,&circle_icon,250,790,38,38);draw_text(b,304,800,"BACK TO DETAILS",3,INK_2);
+    draw_text(b,190,220,card->name,4,ACCENT_SOFT);
+    if(stream_count){
+        for(int i=0;i<stream_count&&i<5;++i){int y=290+i*120,focused=i==s->stream_cursor;StreamSource *source=&stream_sources[i];
+            draw_round_rect(b,190,y,1420,96,26,focused?SURFACE_HI:SURFACE);draw_round_rect(b,220,y+20,120,56,18,0xff563aa7u);
+            draw_text(b,245,y+36,source->name[0]?source->name:"SOURCE",3,INK);draw_text(b,380,y+24,"Public Domain Movies",4,INK);
+            draw_text(b,380,y+62,source->title[0]?source->title:"Torrent source",3,INK_3);draw_text(b,1360,y+38,"READY",3,ACCENT_SOFT);
+            if(focused)draw_focus(b,190,y,1420,96);}
+        draw_image(b,&cross_icon,190,920,38,38);draw_text(b,244,930,stream_status==6?"PLAYER IN DEVELOPMENT":"SELECT SOURCE",3,INK_2);
+    }else {draw_round_rect(b,190,300,1420,280,32,SURFACE);
+        if(stream_status==3){draw_round_rect(b,230,340,84,84,42,0xff315d3fu);draw_image(b,&check_icon,252,362,40,40);draw_text(b,350,360,"No compatible streams found",5,INK);draw_text(b,350,435,"Public Domain was checked for this title",3,INK_2);}
+        else if(stream_status==5){draw_text(b,250,370,"Source request failed",5,INK);draw_text(b,250,450,"Check the network and try again",3,INK_2);}
+        else {draw_text(b,250,370,"No stream addon is enabled",5,INK);draw_text(b,250,450,"Open Addons to configure a source",3,INK_2);}
+        draw_round_rect(b,250,630,500,82,41,0xff563aa7u);draw_image(b,&cross_icon,278,652,38,38);draw_text(b,340,654,"OPEN ADDONS",4,INK);}
+    draw_image(b,&circle_icon,1250,920,38,38);draw_text(b,1304,930,"BACK TO DETAILS",3,INK_2);
 }
 static int draw_prompt(void *b,const Image *icon,const char *label,int x,int y){
     draw_image(b,icon,x,y,38,38);draw_text(b,x+50,y+10,label,3,INK_2);return x+50+(int)strlen(label)*18+28;
@@ -473,11 +499,13 @@ static int route_input(AppState *s,uint32_t pressed){
     }
     if(s->streams){
         if(pressed&ORBIS_PAD_BUTTON_CIRCLE)s->streams=0;
-        if(pressed&ORBIS_PAD_BUTTON_CROSS){s->streams=0;s->detail=0;s->page=3;s->rail_focus=0;reset_cursor(s);}return pressed!=0;
+        if(stream_count){if((pressed&ORBIS_PAD_BUTTON_UP)&&s->stream_cursor>0)--s->stream_cursor;if((pressed&ORBIS_PAD_BUTTON_DOWN)&&s->stream_cursor<stream_count-1)++s->stream_cursor;
+            if(pressed&ORBIS_PAD_BUTTON_CROSS)stream_status=6;}
+        else if(pressed&ORBIS_PAD_BUTTON_CROSS){s->streams=0;s->detail=0;s->page=3;s->rail_focus=0;reset_cursor(s);}return pressed!=0;
     }
     if(s->detail){
         if(pressed&ORBIS_PAD_BUTTON_CIRCLE)s->detail=0;
-        if(pressed&ORBIS_PAD_BUTTON_CROSS)s->streams=1;
+        if(pressed&ORBIS_PAD_BUTTON_CROSS){s->stream_cursor=0;load_stream_sources(&live_cards[s->detail_index]);s->streams=1;}
         if(pressed&ORBIS_PAD_BUTTON_SQUARE){live_cards[s->detail_index].saved^=1;save_state(s);}
         return pressed!=0;
     }

@@ -96,6 +96,10 @@ Version 0.22 rebuilds Addons as a PS5-style two-column tile grid with matching
 controller navigation, enriches Library with filters and counts, fills the title
 page with an About panel and metadata badges, and makes stream empty states
 reflect the source that was actually checked.
+Version 0.23 connects Find Streams to the live Public Domain stream endpoint,
+parses real source names, sizes and info hashes, displays navigable source rows,
+and distinguishes no-match, disabled-addon, and request-failure states. Search
+now combines movie and series results in one screen.
 
 The output is `dist-ps4/IV0000-BREW00991_00-STREMIOPS4000000.pkg`.
 The current package is a native 1080p VideoOut application using DualShock 4

@@ -24,6 +24,9 @@ rounded clipping for poster artwork.
 Version 0.22 adds the PS5 two-column addon tiles and matching grid navigation,
 library filters and counts, richer title metadata panels, addon-aware stream
 empty states, additional PS5 icons, and denser Board status presentation.
+Version 0.23 resolves selected titles against the enabled Public Domain addon,
+parses real torrent source metadata into PS5-style rows, adds source navigation
+and explicit network/no-match states, and searches movies and series together.
 
 The upstream PS5 documentation is retained below while features are moved to
 the PS4 platform layer. PS5 installation instructions and artifacts do not
