@@ -80,3 +80,8 @@ No unchecked matrix row is considered passed by compilation alone. Direct
 media needs codec/container testing on both PS4 models. Torrent, FFmpeg fallback,
 subtitle, audio-track, IME, sound and suspend integrations still need PS4
 platform implementations.
+
+The 0.32 follow-up connects external addon subtitles, the shared PS5 subtitle
+parsers, AVPlayer audio-stream selection and next-episode autoplay. Subtitle
+format parsing is sanitizer-tested; full Unicode shaping/font coverage and the
+new controls still require hardware acceptance.

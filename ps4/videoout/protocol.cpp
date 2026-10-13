@@ -1,6 +1,7 @@
 // C bridge to the original PS5 Stremio protocol and JSON implementation.
 #include "protocol.h"
 #include "stremio.h"
+#include "subtitles.h"
 #include <cstring>
 #include <memory>
 #include <cmath>
@@ -8,6 +9,8 @@ namespace {
 const json empty;
 const json &value(PJson p) { return p ? *static_cast<const json *>(p) : empty; }
 std::vector<Stream> streams;
+std::vector<SubtitleTrack> subtitles;
+std::vector<Cue> cues;
 json progress=json::object();
 int copy(const std::string &s,char *out,size_t n) {
     if(!out||!n)return 0;
@@ -57,6 +60,26 @@ const char *pj_stream_field(int i,int field){if(i<0||size_t(i)>=streams.size())r
     switch(field){case 0:return s.name.c_str();case 1:return s.description.c_str();case 2:return s.url.c_str();case 3:return s.info_hash.c_str();case 4:return s.addon.c_str();default:return "";}}
 int pj_stream_file(int i){return i>=0&&size_t(i)<streams.size()?streams[size_t(i)].file_idx:-1;}
 int pj_stream_needs_headers(int i){return i>=0&&size_t(i)<streams.size()&&!streams[size_t(i)].request_headers.empty();}
+void pj_subtitle_reset(void){subtitles.clear();cues.clear();}
+int pj_subtitles(const char *text,const char *addon){try{
+    auto j=json::parse(text,nullptr,false);if(j.is_discarded()||!j.is_object()||!j.contains("subtitles")||!j["subtitles"].is_array())return -1;
+    auto result=parse_subtitles(j,addon);for(auto &s:result){if(subtitles.size()>=64)break;subtitles.push_back(std::move(s));}
+    return int(subtitles.size());
+}catch(...){return -1;}}
+const char *pj_subtitle_field(int i,int field){if(i<0||size_t(i)>=subtitles.size())return "";auto &s=subtitles[size_t(i)];
+    switch(field){case 0:return s.url.c_str();case 1:return s.lang.c_str();case 2:return s.label.c_str();case 3:return s.addon.c_str();default:return "";}}
+int pj_subtitle_load(const char *text){try{cues=parse_subtitle_file(text?text:"");return int(cues.size());}catch(...){cues.clear();return 0;}}
+int pj_subtitle_at(double seconds,char *out,size_t n){try{
+    std::string r=cues_at(cues,seconds),plain;plain.reserve(r.size());
+    for(size_t i=0;i<r.size();){
+        if(r.compare(i,5,"<br/>")==0){plain+='\n';i+=5;continue;}
+        if(r[i]=='<'){size_t e=r.find('>',i);if(e!=std::string::npos){i=e+1;continue;}}
+        struct Entity{const char *from,*to;};static const Entity entities[]={{"&amp;","&"},{"&lt;","<"},{"&gt;",">"},{"&quot;","\""},{"&apos;","'"},{"&#39;","'"},{"&#123;","{"},{"&#125;","}"}};
+        bool entity=false;for(auto &e:entities){size_t z=std::strlen(e.from);if(r.compare(i,z,e.from)==0){plain+=e.to;i+=z;entity=true;break;}}
+        if(!entity)plain+=r[i++];
+    }
+    return copy(plain,out,n)&&!plain.empty();
+}catch(...){if(out&&n)out[0]=0;return 0;}}
 void pj_progress_load(const char *path){try{json loaded;if(load_json(path,loaded)&&loaded.is_object())progress=std::move(loaded);}catch(...){} }
 double pj_progress_resume(const char *title,const char *video){try{
     const auto &item=progress.at(title);if(jstr(item,"video_id")!=video)return 0;

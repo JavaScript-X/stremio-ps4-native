@@ -38,7 +38,7 @@ static const uint32_t INK=0xfff7f7f7u, INK_2=0xffc8c8c8u, INK_3=0xff8f8f8fu;
 typedef struct Image { unsigned char *pixels; int width, height; } Image;
 typedef struct AppState {
     int page, rail_focus, row, column, search, detail, streams, episodes, detail_index;
-    int keyboard, search_cursor, result_focus, discover_series, account, stream_cursor, episode_cursor, season, library_page, playing; char query[24]; int settings[5];
+    int keyboard, search_cursor, result_focus, discover_series, account, stream_cursor, episode_cursor, season, library_page, library_filter, playing; char query[24]; int settings[5];
 } AppState;
 static const char *PAGE_NAMES[PAGE_COUNT]={"Board","Discover","Library","Addons","Settings"};
 static const char *ICON_NAMES[PAGE_COUNT]={"nav_board","nav_discover","nav_library","nav_addons","nav_settings"};
@@ -56,6 +56,7 @@ typedef struct CatalogCard {
 static CatalogCard live_cards[CARD_CAPACITY];
 typedef struct StreamSource {char name[128],title[512],info_hash[64],url[4096],addon[128];int file_index,needs_headers;} StreamSource;
 static StreamSource stream_sources[128];static int stream_count,stream_status;
+static int subtitle_count,subtitle_selected=-1;static char subtitle_label[128];
 typedef struct Episode {char id[128],name[128],description[256];int season,number;} Episode;
 static Episode episodes[2048];static int episode_count,max_season;static char episode_series_id[128],selected_video_id[128];
 static int catalog_count;
@@ -73,6 +74,7 @@ static int stream_failures,stream_queried,library_truncated;
 static int network_cancel;
 static void load_card_poster(CatalogCard *card);
 static int saved_index(int slot);
+static int saved_index_filtered(int slot,int filter);
 static void save_library_cache(void);
 
 static int id_saved(const char *id){for(int i=0;i<saved_id_count;++i)if(!strcmp(saved_ids[i],id))return 1;return 0;}
@@ -256,8 +258,8 @@ static void load_card_poster(CatalogCard *card){
     }
     free(raw);
 }
-static void prepare_library_page(int page){
-    int wanted[5];for(int j=0;j<5;++j)wanted[j]=saved_index(page*5+j);
+static void prepare_library_page(int page,int filter){
+    int wanted[5];for(int j=0;j<5;++j)wanted[j]=saved_index_filtered(page*5+j,filter);
     for(int i=CLOUD_CARD_START;i<CARD_CAPACITY;++i){
         int keep=0;for(int j=0;j<5;++j)if(wanted[j]==i)keep=1;
         if(!keep){stbi_image_free(live_cards[i].poster.pixels);live_cards[i].poster=(Image){0};live_cards[i].poster_attempted=0;}
@@ -353,7 +355,7 @@ static void load_episode_catalog(CatalogCard *card){
 }
 static int first_episode_in_season(int season){for(int i=0;i<episode_count;++i)if(episodes[i].season==season)return i;return -1;}
 static void load_stream_sources(CatalogCard *card){
-    stream_count=stream_failures=stream_queried=0;stream_status=1;pj_stream_reset();
+    stream_count=stream_failures=stream_queried=subtitle_count=0;subtitle_selected=-1;subtitle_label[0]=0;stream_status=1;pj_stream_reset();pj_subtitle_reset();
     memset(stream_sources,0,sizeof(stream_sources));
     const char *type=!strcmp(card->type,"SERIES")?"series":"movie";
     const char *id=!strcmp(type,"series")&&selected_video_id[0]?selected_video_id:card->id;
@@ -362,10 +364,14 @@ static void load_stream_sources(CatalogCard *card){
         PJson addon=pj_at(addons,i),manifest=pj_get(addon,"manifest");
         const char *transport=pj_string(pj_get(addon,"transportUrl"));
         if(strncmp(transport,"https://",8)&&strncmp(transport,"http://",7))continue;
-        if(!pj_resource(manifest,transport,"stream",type,id,url,sizeof(url)))continue;
-        ++stream_queried;size_t size=0;unsigned char *raw=http_get(url,2*1024*1024,&size);
-        if(!raw||pj_streams((char*)raw,pj_string(pj_get(manifest,"name")))<0)++stream_failures;
-        free(raw);
+        size_t size=0;unsigned char *raw=0;
+        if(pj_resource(manifest,transport,"stream",type,id,url,sizeof(url))){
+            ++stream_queried;raw=http_get(url,2*1024*1024,&size);
+            if(!raw||pj_streams((char*)raw,pj_string(pj_get(manifest,"name")))<0)++stream_failures;free(raw);
+        }
+        if(pj_resource(manifest,transport,"subtitles",type,id,url,sizeof(url))){
+            raw=http_get(url,2*1024*1024,&size);if(raw)pj_subtitles((char*)raw,pj_string(pj_get(manifest,"name")));free(raw);
+        }
     }
     if(public_domain_enabled&&public_domain_online){
         snprintf(url,sizeof(url),"https://caching.stremio.net/publicdomainmovies.now.sh/stream/%s/%s.json",type,id);
@@ -382,9 +388,20 @@ static void load_stream_sources(CatalogCard *card){
         snprintf(dst->url,sizeof(dst->url),"%s",direct);snprintf(dst->info_hash,sizeof(dst->info_hash),"%s",hash);
         snprintf(dst->addon,sizeof(dst->addon),"%s",pj_stream_field(i,4));dst->file_index=pj_stream_file(i);dst->needs_headers=pj_stream_needs_headers(i);
     }
+    for(int i=0;i<64&&*pj_subtitle_field(i,0);++i)++subtitle_count;
     stream_status=stream_count?2:!stream_queried?4:stream_failures?5:3;
 }
+static int load_subtitle_track(int index){
+    pj_subtitle_load("");subtitle_selected=-1;subtitle_label[0]=0;if(index<0||index>=subtitle_count)return 1;
+    const char *url=pj_subtitle_field(index,0);if(strncmp(url,"https://",8)&&strncmp(url,"http://",7))return 0;
+    size_t size=0;unsigned char *raw=http_get(url,4*1024*1024,&size);if(!raw)return 0;
+    int cues=pj_subtitle_load((char*)raw);free(raw);if(!cues)return 0;
+    subtitle_selected=index;const char *label=pj_subtitle_field(index,2),*lang=pj_subtitle_field(index,1);
+    snprintf(subtitle_label,sizeof(subtitle_label),"%s%s%s",label,*label&&*lang?" / ":"",lang);return 1;
+}
 static int saved_index(int slot){return slot>=0&&slot<library_count?library_order[slot]:-1;}
+static int saved_index_filtered(int slot,int filter){int found=0;for(int i=0;i<library_count;++i){CatalogCard *c=&live_cards[library_order[i]];
+    if(filter==1&&strcmp(c->type,"MOVIE"))continue;if(filter==2&&strcmp(c->type,"SERIES"))continue;if(found++==slot)return library_order[i];}return -1;}
 
 static void park_error(const char *message,int code){
     sceKernelDebugOutText(0,"[stremio-ps4] %s: 0x%08x\n",message,(unsigned)code);
@@ -544,12 +561,12 @@ static void draw_discover(void *b,const AppState *s){
     draw_image(b,&square_icon,190,800,38,38);draw_text(b,244,810,"SWITCH MOVIES SERIES",3,INK_3);
 }
 static void draw_library(void *b,const AppState *s){
-    draw_text(b,190,154,"Library",6,INK_2);int count=0;for(int i=0;i<CARD_CAPACITY;++i)if(live_cards[i].saved&&live_cards[i].name[0])++count;
+    draw_text(b,190,154,"Library",6,INK_2);int count=0;while(saved_index_filtered(count,s->library_filter)>=0)++count;
     char summary[64];snprintf(summary,sizeof(summary),"%d saved title%s",count,count==1?"":"s");draw_text(b,190,210,summary,3,INK_3);
-    const char *filters[]={"All","Movies","Series"};for(int i=0;i<3;++i){draw_round_rect(b,190+i*210,252,190,54,27,i==0?0xff563aa7u:SURFACE);draw_text(b,225+i*210,268,filters[i],3,INK);}
-    int shown=0;for(int i=0;i<5;++i){int index=saved_index(s->library_page*5+i);if(index<0)break;draw_card(b,190+i*290,350,250,360,index,!s->rail_focus&&s->column==i,live_cards[index].name);++shown;}if(count>5){char page[40];snprintf(page,sizeof(page),"PAGE %d OF %d",s->library_page+1,(count+4)/5);draw_round_rect(b,1450,260,250,50,25,SURFACE);draw_text(b,1490,275,page,2,INK_2);}
+    const char *filters[]={"All","Movies","Series"};for(int i=0;i<3;++i){draw_round_rect(b,190+i*210,252,190,54,27,i==s->library_filter?0xff563aa7u:SURFACE);draw_text(b,225+i*210,268,filters[i],3,INK);}
+    int shown=0;for(int i=0;i<5;++i){int index=saved_index_filtered(s->library_page*5+i,s->library_filter);if(index<0)break;draw_card(b,190+i*290,350,250,360,index,!s->rail_focus&&s->column==i,live_cards[index].name);++shown;}if(count>5){char page[40];snprintf(page,sizeof(page),"PAGE %d OF %d",s->library_page+1,(count+4)/5);draw_round_rect(b,1450,260,250,50,25,SURFACE);draw_text(b,1490,275,page,2,INK_2);}
     if(!shown){draw_round_rect(b,190,350,1100,190,30,SURFACE);draw_text(b,250,405,"Your library is empty",4,INK);draw_text(b,250,462,"Save any title with Square",3,INK_3);}
-    draw_round_rect(b,190,805,500,64,32,SURFACE_HI);draw_image(b,&check_icon,212,818,36,36);draw_text(b,266,824,"Saved locally on PS4",3,INK_2);
+    draw_round_rect(b,190,805,500,64,32,SURFACE_HI);draw_image(b,&check_icon,212,818,36,36);draw_text(b,266,824,"Saved locally on PS4",3,INK_2);draw_image(b,&square_icon,760,818,36,36);draw_text(b,810,824,"CHANGE FILTER",3,INK_3);
 }
 static void draw_addons(void *b,const AppState *s){
     draw_text(b,190,154,"Addons",6,INK);
@@ -572,12 +589,12 @@ static void draw_settings(void *b,const AppState *s){
     const char *names[]={"BUILTIN TORRENTS","AUTO SUBTITLES","AUTOPLAY NEXT","UI SOUNDS","PERFORMANCE OVERLAY"};
     for(int i=0;i<5;++i){int y=200+i*100;draw_round_rect(b,190,y,950,78,22,!s->rail_focus&&s->row==i?SURFACE_HI:SURFACE);
         draw_text(b,226,y+32,names[i],4,!s->rail_focus&&s->row==i?INK:INK_2);draw_round_rect(b,1000,y+24,104,42,21,s->settings[i]?0xff563aa7u:0xff514951u);
-        draw_text(b,1025,y+32,i<4?"N/A":s->settings[i]?"ON":"OFF",3,INK);if(!s->rail_focus&&s->row==i)draw_focus(b,190,y,950,78);}
+        draw_text(b,1025,y+32,(i==1||i==2||i==4)?(s->settings[i]?"ON":"OFF"):"N/A",3,INK);if(!s->rail_focus&&s->row==i)draw_focus(b,190,y,950,78);}
     int y=710;draw_round_rect(b,190,y,950,78,22,!s->rail_focus&&s->row==5?SURFACE_HI:SURFACE);draw_text(b,226,y+28,"STREMIO ACCOUNT",4,INK_2);
     draw_text(b,890,y+30,auth_key[0]?"LINKED":"LINK DEVICE",3,auth_key[0]?ACCENT_SOFT:INK_3);if(!s->rail_focus&&s->row==5)draw_focus(b,190,y,950,78);
     const char *help_title=s->row==0?"BUILTIN TORRENTS":s->row==1?"AUTO SUBTITLES":s->row==2?"AUTOPLAY NEXT":s->row==3?"UI SOUNDS":s->row==4?"PERFORMANCE OVERLAY":"STREMIO ACCOUNT";
-    const char *help=s->row==0?"Torrent sources resolve, but the torrent engine is not yet ported.":s->row==1?"Subtitle decoding and rendering are not available in this player yet.":s->row==2?"Automatic next-episode playback is not available yet.":s->row==3?"The PS5 sound mixer is not connected to this renderer yet.":s->row==4?"SHOW MEASURED FPS AND FRAME TIME. GOLDHEN GAME OVERLAY CAN RUN ALONGSIDE IT":"LINK YOUR ACCOUNT WITH A SECURE SHORT CODE";
-    draw_round_outline(b,1200,200,620,568,32,2,0xff514651u);draw_text(b,1245,260,help_title,4,INK);draw_text(b,1245,330,s->row<4?"NOT PORTED":s->row<5?(s->settings[s->row]?"ON":"OFF"):(auth_key[0]?"LINKED":"NOT LINKED"),4,ACCENT_SOFT);
+    const char *help=s->row==0?"Torrent sources resolve, but the torrent engine is not yet ported.":s->row==1?"LOAD TEXT SUBTITLES FROM YOUR INSTALLED ADDONS":s->row==2?"Automatic next-episode playback is not available yet.":s->row==3?"The PS5 sound mixer is not connected to this renderer yet.":s->row==4?"SHOW MEASURED FPS AND FRAME TIME. GOLDHEN GAME OVERLAY CAN RUN ALONGSIDE IT":"LINK YOUR ACCOUNT WITH A SECURE SHORT CODE";
+    draw_round_outline(b,1200,200,620,568,32,2,0xff514651u);draw_text(b,1245,260,help_title,4,INK);draw_text(b,1245,330,s->row==1||s->row==2||s->row==4?(s->settings[s->row]?"ON":"OFF"):s->row<4?"NOT PORTED":(auth_key[0]?"LINKED":"NOT LINKED"),4,ACCENT_SOFT);
     draw_wrapped(b,1245,410,help,31,5);draw_round_rect(b,1245,650,230,58,29,INK);draw_image(b,&cross_icon,1260,660,38,38);draw_text(b,1312,670,s->row==5?"OPEN":"SWITCH",3,GROUND);
 }
 static void draw_account(void *b,const AppState *s){
@@ -674,19 +691,25 @@ static void draw_toast(void *b){if(!toast_frames||!toast_text[0])return;int w=52
 static void draw_player(void *b){
     PlaybackStatus p=playback_status();
     if(video_canvas)memcpy(b,video_canvas,(size_t)WIDTH*HEIGHT*4);else fill_buffer(b,0xff000000u);
+    char subtitle[1024]={0};if(subtitle_selected>=0&&pj_subtitle_at((double)p.position_ms/1000.0,subtitle,sizeof(subtitle))){
+        char *second=strchr(subtitle,'\n');if(second)*second++=0;int w=(int)strlen(subtitle)*16+80;if(w>1700)w=1700;
+        draw_round_rect(b,(WIDTH-w)/2,770,w,58,18,0xd9110b0cu);draw_text(b,(WIDTH-w)/2+40,786,subtitle,3,INK);
+        if(second&&*second){int w2=(int)strlen(second)*16+80;if(w2>1700)w2=1700;draw_round_rect(b,(WIDTH-w2)/2,832,w2,58,18,0xd9110b0cu);draw_text(b,(WIDTH-w2)/2+40,848,second,3,INK);}
+    }
     if(playback_controls||p.paused||p.buffering||p.error){
         draw_rect(b,0,0,WIDTH,115,0xff110b0cu);draw_text(b,80,32,"Stremio player",5,INK);
         char timeline[96];snprintf(timeline,sizeof(timeline),"%llu:%02llu / %llu:%02llu", (unsigned long long)(p.position_ms/60000),(unsigned long long)(p.position_ms/1000%60),(unsigned long long)(p.duration_ms/60000),(unsigned long long)(p.duration_ms/1000%60));
         draw_rect(b,0,900,WIDTH,180,0xff110b0cu);draw_text(b,90,920,timeline,4,INK);
         int played=p.duration_ms?(int)((double)p.position_ms/p.duration_ms*1740):0;if(played>1740)played=1740;
         draw_round_rect(b,90,980,1740,8,4,SURFACE_HI);if(played>0)draw_round_rect(b,90,980,played,8,4,ACCENT_SOFT);
-        int x=90;x=draw_prompt(b,&cross_icon,p.paused?"PLAY":"PAUSE",x,1020);x=draw_prompt(b,&dpad_icon,"10 SEC",x,1020);x=draw_prompt(b,&l1_icon,"-1 MIN",x,1020);x=draw_prompt(b,&r1_icon,"+1 MIN",x,1020);draw_prompt(b,&circle_icon,"STOP",x,1020);
+        int x=90;x=draw_prompt(b,&cross_icon,p.paused?"PLAY":"PAUSE",x,1020);x=draw_prompt(b,&dpad_icon,"10 SEC",x,1020);x=draw_prompt(b,&square_icon,subtitle_count?"SUBTITLES":"NO SUBS",x,1020);x=draw_prompt(b,&triangle_icon,p.audio_tracks>1?"AUDIO":"AUDIO",x,1020);x=draw_prompt(b,&l1_icon,"-1 MIN",x,1020);x=draw_prompt(b,&r1_icon,"+1 MIN",x,1020);draw_prompt(b,&circle_icon,"STOP",x,1020);
+        if(subtitle_selected>=0&&subtitle_label[0])draw_text(b,1450,55,subtitle_label,2,INK_2);if(p.audio_tracks>1&&p.audio_language[0])draw_text(b,1250,55,p.audio_language,2,INK_2);
         if(p.error||p.buffering){draw_round_rect(b,310,440,1300,150,30,SURFACE);draw_text(b,360,485,p.error?p.message:"Opening stream...",4,p.error?ACCENT_SOFT:INK);}
         if(p.audio_error)draw_text(b,900,55,"Audio format/output unavailable",3,ACCENT_SOFT);
     }
 }
 static void draw_screen(void *b,const AppState *s){
-    if(s->playing){draw_player(b);return;}
+    if(s->playing){draw_player(b);draw_toast(b);return;}
     draw_page_backdrop(b,s);draw_rail(b,s);draw_topbar(b,s);
     if(s->account)draw_account(b,s);
     else if(s->episodes)draw_episodes(b,s);
@@ -709,6 +732,24 @@ static void save_playback_progress(const AppState *s){
         progress_saved_ms=p.position_ms;
     }
 }
+static int start_stream_source(AppState *s,int index){
+    if(index<0||index>=stream_count)return 0;StreamSource *source=&stream_sources[index];
+    if(source->needs_headers){show_toast("This source requires HTTP header support");return 0;}
+    if(!source->url[0]){show_toast("Torrent backend still requires porting");return 0;}
+    if(!video_canvas)video_canvas=malloc((size_t)WIDTH*HEIGHT*4);if(!video_canvas){show_toast("Not enough memory for video");return 0;}
+    fill_buffer(video_canvas,0xff000000u);
+    if(s->settings[1]&&subtitle_count&&!load_subtitle_track(0))show_toast("Subtitle download failed");else if(!s->settings[1])load_subtitle_track(-1);
+    playback_open(source->url,http_context,ssl_context);CatalogCard *card=&live_cards[s->detail_index];const char *video=selected_video_id[0]?selected_video_id:card->id;
+    playback_resume_at((uint64_t)(pj_progress_resume(card->id,video)*1000));progress_saved_ms=0;s->playing=1;playback_controls=180;return 1;
+}
+static int autoplay_next_episode(AppState *s){
+    int current=-1;for(int i=0;i<episode_count;++i)if(!strcmp(episodes[i].id,selected_video_id)){current=i;break;}
+    if(current<0||current+1>=episode_count)return 0;
+    ++current;s->episode_cursor=current;s->season=episodes[current].season;snprintf(selected_video_id,sizeof(selected_video_id),"%s",episodes[current].id);
+    load_stream_sources(&live_cards[s->detail_index]);s->stream_cursor=0;
+    for(int i=0;i<stream_count;++i)if(stream_sources[i].url[0]&&!stream_sources[i].needs_headers){s->stream_cursor=i;return start_stream_source(s,i);}
+    s->playing=0;s->streams=1;s->episodes=0;show_toast("Choose a source for the next episode");return 1;
+}
 static int route_input(AppState *s,uint32_t pressed){
     if(s->playing){
         if(pressed)playback_controls=180;
@@ -718,6 +759,8 @@ static int route_input(AppState *s,uint32_t pressed){
         if(pressed&ORBIS_PAD_BUTTON_RIGHT)playback_seek(10);
         if(pressed&ORBIS_PAD_BUTTON_L1)playback_seek(-60);
         if(pressed&ORBIS_PAD_BUTTON_R1)playback_seek(60);
+        if((pressed&ORBIS_PAD_BUTTON_SQUARE)&&subtitle_count){int next=subtitle_selected+1;if(next>=subtitle_count)next=-1;if(load_subtitle_track(next))show_toast(next<0?"Subtitles off":"Subtitle track selected");else show_toast("Subtitle download failed");}
+        if(pressed&ORBIS_PAD_BUTTON_TRIANGLE)show_toast(playback_cycle_audio()?"Audio track changed":"No alternate audio track");
         return pressed!=0;
     }
     if(s->account){
@@ -739,13 +782,7 @@ static int route_input(AppState *s,uint32_t pressed){
         if(pressed&ORBIS_PAD_BUTTON_CIRCLE)s->streams=0;
         if(stream_count){if((pressed&ORBIS_PAD_BUTTON_UP)&&s->stream_cursor>0)--s->stream_cursor;if((pressed&ORBIS_PAD_BUTTON_DOWN)&&s->stream_cursor<stream_count-1)++s->stream_cursor;
             if(pressed&ORBIS_PAD_BUTTON_CROSS){
-                StreamSource *source=&stream_sources[s->stream_cursor];
-                if(source->needs_headers){show_toast("This source requires HTTP header support");}
-                else if(source->url[0]){
-                    if(!video_canvas)video_canvas=malloc((size_t)WIDTH*HEIGHT*4);
-                    if(video_canvas){fill_buffer(video_canvas,0xff000000u);playback_open(source->url,http_context,ssl_context);CatalogCard *card=&live_cards[s->detail_index];const char *video=selected_video_id[0]?selected_video_id:card->id;playback_resume_at((uint64_t)(pj_progress_resume(card->id,video)*1000));progress_saved_ms=0;s->playing=1;playback_controls=180;}
-                    else show_toast("Not enough memory for video");
-                }else show_toast("Torrent backend still requires porting");
+                start_stream_source(s,s->stream_cursor);
             }}
         else if(pressed&ORBIS_PAD_BUTTON_CROSS){s->streams=0;s->detail=0;s->page=3;s->rail_focus=0;reset_cursor(s);}return pressed!=0;
     }
@@ -786,6 +823,7 @@ static int route_input(AppState *s,uint32_t pressed){
     if((pressed&ORBIS_PAD_BUTTON_OPTIONS)&&s->page==2){for(int i=0;i<CARD_CAPACITY;++i)live_cards[i].poster_attempted=0;show_toast("Refreshing Library artwork");return 1;}
     if((pressed&ORBIS_PAD_BUTTON_OPTIONS)&&s->page==0){refresh_catalogs();show_toast("Catalogs refreshed");return 1;}
     if((pressed&ORBIS_PAD_BUTTON_SQUARE)&&s->page==1){s->discover_series^=1;s->column=0;return 1;}
+    if((pressed&ORBIS_PAD_BUTTON_SQUARE)&&s->page==2){s->library_filter=(s->library_filter+1)%3;s->library_page=0;s->column=0;return 1;}
     if(pressed&ORBIS_PAD_BUTTON_L1){s->page=(s->page+PAGE_COUNT-1)%PAGE_COUNT;s->rail_focus=0;reset_cursor(s);return 1;}
     if(pressed&ORBIS_PAD_BUTTON_R1){s->page=(s->page+1)%PAGE_COUNT;s->rail_focus=0;reset_cursor(s);return 1;}
     if(s->rail_focus){if((pressed&ORBIS_PAD_BUTTON_UP)&&s->row>0)--s->row;if((pressed&ORBIS_PAD_BUTTON_DOWN)&&s->row<PAGE_COUNT-1)++s->row;
@@ -801,12 +839,12 @@ static int route_input(AppState *s,uint32_t pressed){
     }
 
     if(pressed&ORBIS_PAD_BUTTON_LEFT){if(s->page==2&&s->column==0&&s->library_page>0){--s->library_page;s->column=4;}else if(s->column>0&&s->page<3)--s->column;else{s->rail_focus=1;s->row=s->page;}}
-    if((pressed&ORBIS_PAD_BUTTON_RIGHT)&&s->page<3){if(s->page==2&&s->column==4&&saved_index((s->library_page+1)*5)>=0){++s->library_page;s->column=0;}else if(s->column<4&&(s->page!=2||saved_index(s->library_page*5+s->column+1)>=0))++s->column;}
+    if((pressed&ORBIS_PAD_BUTTON_RIGHT)&&s->page<3){if(s->page==2&&s->column==4&&saved_index_filtered((s->library_page+1)*5,s->library_filter)>=0){++s->library_page;s->column=0;}else if(s->column<4&&(s->page!=2||saved_index_filtered(s->library_page*5+s->column+1,s->library_filter)>=0))++s->column;}
     if(pressed&ORBIS_PAD_BUTTON_UP){if((s->page==0||s->page>=3)&&s->row>0)--s->row;}
     if(pressed&ORBIS_PAD_BUTTON_DOWN){if(s->page==0&&s->row<1){++s->row;if(s->column>3)s->column=3;}else if(s->page==3&&s->row<3)++s->row;else if(s->page==4&&s->row<5)++s->row;}
-    if((pressed&ORBIS_PAD_BUTTON_CROSS)&&s->page==4){if(s->row==5){s->account=1;if(!auth_key[0]&&!link_code[0])create_device_link();}else if(s->row<4){show_toast("This feature is not ported yet");}else{s->settings[s->row]^=1;save_state(s);show_toast(s->settings[s->row]?"Setting enabled":"Setting disabled");}}
+    if((pressed&ORBIS_PAD_BUTTON_CROSS)&&s->page==4){if(s->row==5){s->account=1;if(!auth_key[0]&&!link_code[0])create_device_link();}else if(s->row!=1&&s->row!=2&&s->row!=4){show_toast("This feature is not ported yet");}else{s->settings[s->row]^=1;save_state(s);show_toast(s->settings[s->row]?"Setting enabled":"Setting disabled");}}
     else if((pressed&ORBIS_PAD_BUTTON_CROSS)&&(catalog_status==2||s->page==2)&&s->page<3){
-        int index=s->page==0?s->row*5+s->column:s->page==2?saved_index(s->library_page*5+s->column):s->column+(s->page==1&&s->discover_series?5:0);
+        int index=s->page==0?s->row*5+s->column:s->page==2?saved_index_filtered(s->library_page*5+s->column,s->library_filter):s->column+(s->page==1&&s->discover_series?5:0);
         if(index>=0&&index<CARD_CAPACITY&&live_cards[index].name[0]){s->detail_index=index;load_metadata(&live_cards[index]);s->detail=1;}
     }
     if(pressed&ORBIS_PAD_BUTTON_CIRCLE){if(s->page!=0){s->page=0;reset_cursor(s);}else return -1;}return pressed!=0;
@@ -814,16 +852,17 @@ static int route_input(AppState *s,uint32_t pressed){
 /* Only the worker mutates network/catalog state while a job is active.
  * The main thread presents a cached framebuffer; it must not render live data
  * until the acquire/join handoff completes. Fonts and bundled icons are immutable. */
-static struct {pthread_t thread;AppState state;uint32_t pressed;int initial,done,result,active;} job;
+static struct {pthread_t thread;AppState state;uint32_t pressed;int kind,done,result,active;} job;
 static void *run_job(void *unused){
     (void)unused;
-    if(job.initial){load_live_catalog();validate_public_domain();if(auth_key[0])sync_account_data();save_state(&job.state);job.result=1;}
+    if(job.kind==1){load_live_catalog();validate_public_domain();if(auth_key[0])sync_account_data();save_state(&job.state);job.result=1;}
+    else if(job.kind==2)job.result=autoplay_next_episode(&job.state);
     else job.result=route_input(&job.state,job.pressed);
-    if(job.state.page==2&&!job.state.detail&&!job.state.search)prepare_library_page(job.state.library_page);
+    if(job.state.page==2&&!job.state.detail&&!job.state.search)prepare_library_page(job.state.library_page,job.state.library_filter);
     __atomic_store_n(&job.done,1,__ATOMIC_RELEASE);return 0;
 }
-static int begin_job(const AppState *state,uint32_t pressed,int initial){
-    job.state=*state;job.pressed=pressed;job.initial=initial;job.result=0;
+static int begin_job(const AppState *state,uint32_t pressed,int kind){
+    job.state=*state;job.pressed=pressed;job.kind=kind;job.result=0;
     __atomic_store_n(&network_cancel,0,__ATOMIC_RELEASE);__atomic_store_n(&job.done,0,__ATOMIC_RELEASE);
     pthread_attr_t attr;pthread_attr_init(&attr);pthread_attr_setstacksize(&attr,2*1024*1024);
     int r=pthread_create(&job.thread,&attr,run_job,0);pthread_attr_destroy(&attr);job.active=r==0;return job.active;
@@ -872,7 +911,8 @@ int main(void){
             if(state.playing){
                 new_video=playback_video(video_canvas,WIDTH,HEIGHT);PlaybackStatus ps=playback_status();
                 if(ps.position_ms>progress_saved_ms+10000)save_playback_progress(&state);
-                if(ps.ended){save_playback_progress(&state);playback_close();state.playing=0;changed=1;show_toast("Playback finished");}
+                if(ps.ended){save_playback_progress(&state);playback_close();state.playing=0;changed=1;
+                    if(state.settings[2]&&selected_video_id[0]&&begin_job(&state,0,2))show_toast("Loading next episode");else show_toast("Playback finished");}
                 if(playback_controls)--playback_controls;
             }
             if(toast_frames>0){--toast_frames;if(!toast_frames)toast_expired=1;}

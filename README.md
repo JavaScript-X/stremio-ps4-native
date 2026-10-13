@@ -56,6 +56,12 @@ pause/seeking/resume positions, persists full Library cards offline, and moves
 blocking network work away from the render loop. Real-console testing is still
 required. Torrents, subtitles, track selection, autoplay and interface sounds
 remain unported and are visibly marked unavailable.
+Version 0.32 adds addon-provided subtitles using the PS5 SRT, WebVTT, ASS and
+MicroDVD parser, automatic and controller-selectable subtitle tracks, AVPlayer
+audio-track discovery/switching, and automatic resolution and launch of the
+next series episode. These features retain the asynchronous networking and
+stable VideoOut renderer validated in 0.31. Library Movies/Series filters are
+now functional rather than decorative.
 
 The upstream PS5 documentation is retained below while features are moved to
 the PS4 platform layer. PS5 installation instructions and artifacts do not

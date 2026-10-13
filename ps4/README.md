@@ -146,6 +146,16 @@ runs outside the render loop with a cancellable busy view. This is a hardware-
 test milestone. Torrents, subtitles, track selection, autoplay, UI sounds, PS4
 IME search and cloud-library writes are not yet ported.
 
+Version 0.32 ports addon subtitle discovery and the PS5 subtitle parsers for
+SRT, WebVTT, ASS and MicroDVD. Subtitles may load automatically or be cycled
+with Square during playback. Triangle cycles AVPlayer audio streams when a
+container exposes alternatives. Autoplay-next resolves the following episode's
+addon sources and opens the first compatible direct stream. Torrent playback,
+full Unicode glyph coverage, interface sounds, system IME and cloud-library
+writes remain separate platform work.
+The Library's All, Movies and Series controls now filter both counts and paged
+card navigation; Square changes the active filter.
+
 The output is `dist-ps4/IV0000-BREW00991_00-STREMIOPS4000000.pkg`.
 The current package is a native 1080p VideoOut application using DualShock 4
 navigation and PS4 networking. Firmware 13.02 with GoldHEN 2.4b18.12 is the

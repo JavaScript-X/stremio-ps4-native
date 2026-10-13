@@ -16,6 +16,7 @@ static struct {
     bool (*video)(void *,Ps4AvFrameEx *);bool (*audio)(void *,Ps4AvFrame *);
     uint64_t (*time)(void *);int (*seek)(void *,uint64_t);int (*count)(void *);
     int (*info)(void *,uint32_t,Ps4AvStream *);
+    int (*enable)(void *,uint32_t);int (*disable)(void *,uint32_t);
 } api;
 static void *player;
 static PlaybackStatus status;
@@ -48,6 +49,7 @@ static int load_api(void){
     RESOLVE(video,"sceAvPlayerGetVideoDataEx");RESOLVE(audio,"sceAvPlayerGetAudioData");RESOLVE(time,"sceAvPlayerCurrentTime");
     RESOLVE(seek,"sceAvPlayerJumpToTime");RESOLVE(count,"sceAvPlayerStreamCount");RESOLVE(info,"sceAvPlayerGetStreamInfo");
 #undef RESOLVE
+    sceKernelDlsym(mod,"sceAvPlayerEnableStream",(void**)&api.enable);sceKernelDlsym(mod,"sceAvPlayerDisableStream",(void**)&api.disable);
     return 1;
 }
 static void *audio_loop(void *unused){
@@ -89,6 +91,14 @@ int playback_open(const char *url,int http,int ssl){
 void playback_toggle_pause(void){pthread_mutex_lock(&api_mutex);if(player){int r=status.paused?api.resume(player):api.pause(player);if(r>=0)status.paused=!status.paused;else fail("Pause failed",r);}pthread_mutex_unlock(&api_mutex);}
 void playback_seek(int seconds){pthread_mutex_lock(&api_mutex);if(player){int64_t target=(int64_t)api.time(player)+(int64_t)seconds*1000;if(target<0)target=0;if(status.duration_ms&&(uint64_t)target>=status.duration_ms)target=status.duration_ms-1;int r=api.seek(player,(uint64_t)target);if(r<0)fail("Seek unavailable",r);}pthread_mutex_unlock(&api_mutex);}
 void playback_resume_at(uint64_t milliseconds){resume_ms=milliseconds;}
+int playback_cycle_audio(void){
+    pthread_mutex_lock(&api_mutex);int ids[32],count=0;
+    if(player&&api.enable&&api.disable){int n=api.count(player);for(int i=0;i<n&&i<64&&count<32;++i){Ps4AvStream st={0};if(api.info(player,(uint32_t)i,&st)>=0&&st.type==1)ids[count++]=i;}}
+    if(count<2){pthread_mutex_unlock(&api_mutex);return 0;}int pick=0;for(int i=0;i<count;++i)if(ids[i]==status.audio_track)pick=(i+1)%count;
+    for(int i=0;i<count;++i)api.disable(player,(uint32_t)ids[i]);int r=api.enable(player,(uint32_t)ids[pick]);
+    if(r>=0){status.audio_track=ids[pick];Ps4AvStream st={0};api.info(player,(uint32_t)ids[pick],&st);memcpy(status.audio_language,st.details.audio.language,4);status.audio_language[4]=0;}
+    pthread_mutex_unlock(&api_mutex);return r>=0;
+}
 int playback_video(uint32_t *out,int w,int h){
     pthread_mutex_lock(&api_mutex);int drawn=0;
     if(player){Ps4AvFrameEx f={0};if(api.video(player,&f)){
@@ -103,7 +113,7 @@ int playback_video(uint32_t *out,int w,int h){
         }
         status.position_ms=api.time(player);
         if(status.has_video&&resume_ms){int r=api.seek(player,resume_ms);resume_ms=0;if(r<0)fail("Resume seek unavailable",r);}
-        if(!status.duration_ms){int n=api.count(player);for(int i=0;i<n&&i<64;++i){Ps4AvStream st={0};if(api.info(player,(uint32_t)i,&st)>=0&&st.duration>status.duration_ms)status.duration_ms=st.duration;}}
+        if(!status.duration_ms||!status.audio_tracks){int n=api.count(player),audio=0;for(int i=0;i<n&&i<64;++i){Ps4AvStream st={0};if(api.info(player,(uint32_t)i,&st)>=0){if(st.duration>status.duration_ms)status.duration_ms=st.duration;if(st.type==1){if(!audio){status.audio_track=i;memcpy(status.audio_language,st.details.audio.language,4);status.audio_language[4]=0;}++audio;}}}status.audio_tracks=audio;}
         int ev=__atomic_load_n(&event_state,__ATOMIC_ACQUIRE);status.buffering=ev==5||(!status.has_video&&!status.error);
         if(ev==1&&status.has_video)status.ended=1;
         if(!status.has_video&&now_ms()-started_ms>30000)fail("No video received within 30 seconds",-1);

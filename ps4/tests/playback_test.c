@@ -23,8 +23,9 @@ static bool mock_video(void *p,Ps4AvFrameEx *f){assert(p==&init);f->data=mode==1
 static bool mock_audio(void *p,Ps4AvFrame *f){static int16_t pcm[2048];assert(p==&init);f->data=pcm;f->details.audio=(Ps4AvAudio){.channels=2,.rate=48000,.size=sizeof(pcm)};return true;}
 static uint64_t mock_time(void *p){assert(p==&init);return atomic_load(&position);}
 static int mock_seek(void *p,uint64_t t){assert(p==&init);atomic_store(&position,t);return 0;}
-static int mock_count(void *p){assert(p==&init);return 1;}
-static int mock_info(void *p,uint32_t i,Ps4AvStream *s){assert(p==&init&&i==0);s->duration=100000;return 0;}
+static int mock_count(void *p){assert(p==&init);return 3;}
+static int mock_info(void *p,uint32_t i,Ps4AvStream *s){assert(p==&init&&i<3);s->type=i?1:0;s->duration=100000;if(i==1)memcpy(s->details.audio.language,"eng",4);if(i==2)memcpy(s->details.audio.language,"fre",4);return 0;}
+static int mock_stream(void *p,uint32_t i){assert(p==&init&&i<3);return 0;}
 size_t sceKernelGetDirectMemorySize(void){return 1024*1024;}
 int sceKernelAllocateDirectMemory(off_t a,off_t b,size_t n,size_t align,int type,off_t *out){(void)a;(void)b;assert(n>=6&&align==16384&&type==3);++allocations;*out=16384;return 0;}
 int sceKernelMapDirectMemory(void **out,size_t n,int prot,int flags,off_t offset,size_t align){(void)flags;(void)offset;assert(prot==0x33);return posix_memalign(out,align,n);}
@@ -39,6 +40,7 @@ int sceKernelDlsym(int m,const char *name,void **out){assert(m==1);
     SYM("sceAvPlayerClose",mock_close) SYM("sceAvPlayerStop",mock_control) SYM("sceAvPlayerPause",mock_control) SYM("sceAvPlayerResume",mock_control)
     SYM("sceAvPlayerGetVideoDataEx",mock_video) SYM("sceAvPlayerGetAudioData",mock_audio) SYM("sceAvPlayerCurrentTime",mock_time)
     SYM("sceAvPlayerJumpToTime",mock_seek) SYM("sceAvPlayerStreamCount",mock_count) SYM("sceAvPlayerGetStreamInfo",mock_info)
+    SYM("sceAvPlayerEnableStream",mock_stream) SYM("sceAvPlayerDisableStream",mock_stream)
     return -1;
 }
 int sceUserServiceGetInitialUser(int *out){*out=1;return 0;}
@@ -53,6 +55,7 @@ int main(void){uint32_t pixels[4];
         mode=0;atomic_store(&position,0);assert(playback_open("https://example.org/test.mp4",7,8));
         playback_resume_at(12000);assert(playback_video(pixels,2,2));assert(atomic_load(&position)==12000);
         assert(playback_status().has_video&&playback_status().duration_ms==100000);
+        assert(playback_status().audio_tracks==2&&playback_cycle_audio()&&playback_status().audio_track==2);
         playback_toggle_pause();assert(playback_status().paused);playback_toggle_pause();assert(!playback_status().paused);
         playback_seek(-60);assert(atomic_load(&position)==0);playback_seek(200);assert(atomic_load(&position)==99999);
         sceKernelUsleep(10000);assert(atomic_load(&audio_blocks)>0);

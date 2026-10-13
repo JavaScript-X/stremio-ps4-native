@@ -46,10 +46,10 @@ endif
 
 ifeq ($(BUILD_MODE),videoout)
 TITLE       := Stremio PS4
-VERSION     := 0.31
+VERSION     := 0.32
 SOURCE      := videoout/main.c
 OBJECT      := $(OBJDIR)/videoout.o
-EXTRA_OBJECTS := $(OBJDIR)/protocol.o $(OBJDIR)/stremio.o $(OBJDIR)/util.o $(OBJDIR)/playback.o $(OBJDIR)/video_convert.o
+EXTRA_OBJECTS := $(OBJDIR)/protocol.o $(OBJDIR)/stremio.o $(OBJDIR)/util.o $(OBJDIR)/subtitles.o $(OBJDIR)/bidi.o $(OBJDIR)/playback.o $(OBJDIR)/video_convert.o
 LIBS        := -lc -lm -lkernel -lSceVideoOut -lSceSystemService -lScePad -lSceUserService \
 	-lSceNet -lSceSsl -lSceHttp -lSceSysmodule -lSceAudioOut -lc++
 EXTRAFLAGS  := -O2 -DPLATFORM_PS4=1
@@ -105,6 +105,12 @@ $(OBJDIR)/stremio.o: $(ROOT)/src/stremio.cpp | $(OBJDIR)
 	$(CCX) $(CXXFLAGS) -std=c++17 -fexceptions -ffunction-sections -fdata-sections -I$(ROOT)/third_party -o $@ $<
 
 $(OBJDIR)/util.o: $(ROOT)/src/util.cpp | $(OBJDIR)
+	$(CCX) $(CXXFLAGS) -std=c++17 -fexceptions -ffunction-sections -fdata-sections -I$(ROOT)/third_party -o $@ $<
+
+$(OBJDIR)/subtitles.o: $(ROOT)/src/subtitles.cpp $(ROOT)/src/subtitles.h | $(OBJDIR)
+	$(CCX) $(CXXFLAGS) -std=c++17 -fexceptions -ffunction-sections -fdata-sections -I$(ROOT)/third_party -o $@ $<
+
+$(OBJDIR)/bidi.o: $(ROOT)/src/bidi.cpp $(ROOT)/src/bidi.h | $(OBJDIR)
 	$(CCX) $(CXXFLAGS) -std=c++17 -fexceptions -ffunction-sections -fdata-sections -I$(ROOT)/third_party -o $@ $<
 
 $(BUILD)/bootstrap.elf: $(OBJECT) $(EXTRA_OBJECTS)

@@ -28,6 +28,12 @@ int main(){
     pj_stream_reset();assert(!*pj_stream_field(0,2));
     assert(pj_streams(R"({"streams":[{"url":"https://example.org/video","behaviorHints":{"proxyHeaders":{"request":{"Authorization":"secret"}}}}]})","Test")==1);
     assert(pj_stream_needs_headers(0));pj_stream_reset();
+    assert(pj_subtitles(R"({"subtitles":[{"id":"eng","url":"https://example.org/sub.srt","lang":"eng"}]})","OpenSubtitles")==1);
+    assert(!std::strcmp(pj_subtitle_field(0,0),"https://example.org/sub.srt"));
+    assert(pj_subtitle_load("1\n00:00:01,000 --> 00:00:03,000\nHello <i>world</i> & more\n\n")==1);
+    char subtitle[128];assert(!pj_subtitle_at(.5,subtitle,sizeof(subtitle)));
+    assert(pj_subtitle_at(2,subtitle,sizeof(subtitle))&&!std::strcmp(subtitle,"Hello world & more"));
+    pj_subtitle_reset();
     d=pj_parse(R"({"result":{"code":"Ab12","authKey":"abc"},"error":{"code":"wrong"}})");
     assert(!std::strcmp(pj_string(pj_get(pj_get(d,"result"),"code")),"Ab12"));pj_free(d);
     PCard card={"tt1","A quoted \"title\"","movie","https://example.org/a?key=1","1998","Description"};
