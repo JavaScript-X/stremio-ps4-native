@@ -43,6 +43,9 @@ independent Game Overlay counter.
 Version 0.28 renders the UI in cacheable CPU memory before one sequential
 VideoOut upload and fast-paths opaque poster pixels, addressing the measured
 5 FPS bottleneck without replacing the stable native backend.
+Version 0.29 connects linked accounts to the Stremio datastore and addon
+collection services, with automatic library/addon import, native sync status,
+cloud-saved title merging, and manual account resync.
 
 The upstream PS5 documentation is retained below while features are moved to
 the PS4 platform layer. PS5 installation instructions and artifacts do not

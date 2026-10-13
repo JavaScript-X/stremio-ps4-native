@@ -61,6 +61,7 @@ static int poster_count;
 static int net_pool, ssl_context, http_context;
 static char auth_key[256], link_code[16], link_url[128];
 static int account_status, public_domain_enabled=1, public_domain_online;
+static int account_sync_status,account_addon_count;
 
 static int id_saved(const char *id){for(int i=0;i<saved_id_count;++i)if(!strcmp(saved_ids[i],id))return 1;return 0;}
 static void apply_saved(void){for(int i=0;i<15;++i)if(live_cards[i].id[0])live_cards[i].saved=id_saved(live_cards[i].id);}
@@ -118,6 +119,23 @@ done:
     sceKernelDebugOutText(0,"[stremio-ps4] GET %s status=%d bytes=%lu\n",url,status,(unsigned long)used);return body;
 }
 
+static unsigned char *http_post_json(const char *url,const char *payload,size_t limit,size_t *received){
+    *received=0;int tpl=0,conn=0,req=0,status=0;unsigned char *body=0;size_t used=0,capacity=0;size_t payload_size=strlen(payload);
+    tpl=sceHttpCreateTemplate(http_context,"Stremio-PS4/0.29",ORBIS_HTTP_VERSION_1_1,1);if(tpl<0)goto done;
+    sceHttpSetResolveTimeOut(tpl,5000000);sceHttpSetConnectTimeOut(tpl,5000000);sceHttpSetRecvTimeOut(tpl,10000000);
+    conn=sceHttpCreateConnectionWithURL(tpl,url,1);if(conn<0)goto done;
+    req=sceHttpCreateRequestWithURL(conn,ORBIS_METHOD_POST,url,payload_size);if(req<0)goto done;
+    sceHttpAddRequestHeader(req,"Accept","application/json",0);sceHttpAddRequestHeader(req,"Content-Type","application/json",0);
+    if(sceHttpSendRequest(req,payload,payload_size)<0||sceHttpGetStatusCode(req,&status)<0||status<200||status>=300)goto done;
+    capacity=64*1024;if(capacity>limit)capacity=limit;body=(unsigned char*)malloc(capacity+1);if(!body)goto done;
+    for(;;){if(used==capacity){size_t next=capacity*2;if(next>limit)next=limit;if(next<=capacity)goto failed;unsigned char *grown=(unsigned char*)realloc(body,next+1);if(!grown)goto failed;body=grown;capacity=next;}
+        int got=sceHttpReadData(req,body+used,(uint32_t)(capacity-used));if(got<0)goto failed;if(!got)break;used+=(size_t)got;}
+    body[used]=0;*received=used;goto done;
+failed: free(body);body=0;used=0;
+done: if(req>0)sceHttpDeleteRequest(req);if(conn>0)sceHttpDeleteConnection(conn);if(tpl>0)sceHttpDeleteTemplate(tpl);
+    sceKernelDebugOutText(0,"[stremio-ps4] POST %s status=%d bytes=%lu\n",url,status,(unsigned long)used);return body;
+}
+
 static const char *json_value(const char *from,const char *key,char *out,size_t out_size,int uppercase){
     const char *p=strstr(from,key);if(!p)return 0;p+=strlen(key);size_t n=0;
     while(*p&&*p!='\"'){if(*p=='\\'&&p[1])++p;if(n+1<out_size){char c=*p;out[n++]=uppercase&&c>='a'&&c<='z'?c-32:c;}++p;}
@@ -138,6 +156,18 @@ static void poll_device_link(void){
     unsigned char *json=http_get(url,256*1024,&size);if(!json){account_status=2;return;}const char *v=strstr((char*)json,"\"authKey\":\"");
     if(v){json_value(v,"\"authKey\":\"",auth_key,sizeof(auth_key),0);if(auth_key[0]){account_status=4;save_account();}}
     else account_status=2;free(json);
+}
+static void sync_account_data(void){
+    if(!auth_key[0]||!network_init())return;account_sync_status=1;char body[640];size_t size=0;
+    snprintf(body,sizeof(body),"{\"authKey\":\"%s\",\"collection\":\"libraryItem\",\"ids\":[],\"all\":true}",auth_key);
+    unsigned char *json=http_post_json("https://api.strem.io/api/datastoreGet",body,2*1024*1024,&size);
+    if(!json){account_sync_status=3;return;}const char *p=(char*)json;saved_id_count=0;
+    while(saved_id_count<15&&(p=strstr(p,"\"_id\":\""))){char id[24]={0};const char *next=json_value(p,"\"_id\":\"",id,sizeof(id),0);const char *removed=strstr(p,"\"removed\":true");if(id[0]&&(!removed||removed>next))strncpy(saved_ids[saved_id_count++],id,23);p=next?next:p+7;}
+    free(json);apply_saved();
+    snprintf(body,sizeof(body),"{\"type\":\"AddonCollectionGet\",\"authKey\":\"%s\",\"update\":true}",auth_key);
+    json=http_post_json("https://api.strem.io/api/addonCollectionGet",body,2*1024*1024,&size);account_addon_count=0;
+    if(json){p=(char*)json;while((p=strstr(p,"\"transportUrl\""))){++account_addon_count;p+=14;}free(json);}
+    account_sync_status=2;
 }
 static void validate_public_domain(void){
     public_domain_online=0;if(!public_domain_enabled||!network_init())return;size_t size=0;
@@ -410,7 +440,7 @@ static void draw_library(void *b,const AppState *s){
     draw_round_rect(b,190,805,500,64,32,SURFACE_HI);draw_image(b,&check_icon,212,818,36,36);draw_text(b,266,824,"Saved locally on PS4",3,INK_2);
 }
 static void draw_addons(void *b,const AppState *s){
-    draw_text(b,190,154,"Addons",6,INK_2);draw_text(b,190,210,"2 installed addons",3,INK_3);
+    draw_text(b,190,154,"Addons",6,INK_2);char addon_summary[64];snprintf(addon_summary,sizeof(addon_summary),auth_key[0]?"%d account addons":"2 local addons",auth_key[0]?account_addon_count:2);draw_text(b,190,210,addon_summary,3,INK_3);
     const char *names[]={"CINEMETA","PUBLIC DOMAIN","LOCAL FILES","COMMUNITY"};
     const char *descriptions[]={"Movies and series metadata","Classic films with legal streams","Play media from USB storage","Install addons from a manifest URL"};
     for(int i=0;i<4;++i){int col=i%2,row=i/2,x=190+col*690,y=270+row*280;draw_round_rect(b,x,y,650,240,30,!s->rail_focus&&s->row==i?SURFACE_HI:SURFACE);
@@ -438,12 +468,12 @@ static void draw_account(void *b,const AppState *s){
     (void)s;draw_text(b,190,140,"Stremio account",6,INK_2);draw_text(b,190,205,"Link this PS4 to your Stremio account",3,INK_3);
     draw_round_rect(b,190,270,1420,430,34,SURFACE);draw_round_rect(b,230,310,180,180,36,0xff3d2a73u);draw_image(b,logo_large.pixels?&logo_large:&logo,270,350,100,100);
     if(account_status==4){draw_round_rect(b,460,320,270,48,24,0xff315d3fu);draw_text(b,500,334,"ACCOUNT LINKED",3,0xff8cffaau);
-        draw_text(b,460,410,"WELCOME BACK",6,INK);draw_text(b,460,500,"YOUR SECURE ACCOUNT KEY IS SAVED LOCALLY",3,INK_2);draw_text(b,460,550,"LIBRARY AND ADDON SYNC IS BEING PREPARED",3,INK_3);}
+        draw_text(b,460,410,"WELCOME BACK",6,INK);draw_text(b,460,500,"YOUR SECURE ACCOUNT KEY IS SAVED LOCALLY",3,INK_2);char sync[96];snprintf(sync,sizeof(sync),account_sync_status==1?"SYNCING LIBRARY AND ADDONS":account_sync_status==2?"SYNCED  %d LIBRARY ITEMS  %d ADDONS":account_sync_status==3?"SYNC FAILED  PRESS OPTIONS TO RETRY":"PRESS OPTIONS TO SYNC",saved_id_count,account_addon_count);draw_text(b,460,550,sync,3,account_sync_status==3?ACCENT_SOFT:INK_3);}
     else {draw_text(b,460,330,account_status==1?"CREATING CODE":account_status==3?"CHECKING APPROVAL":account_status==5?"LINK SERVICE UNAVAILABLE":"ENTER THIS CODE",4,INK_2);
         if(link_code[0]){draw_round_rect(b,460,390,420,116,28,0xff35264fu);draw_text(b,510,418,link_code,10,ACCENT_SOFT);draw_text(b,460,560,"OPEN LINK STREMIO COM ON YOUR PHONE",3,INK);}}
     draw_round_rect(b,230,760,350,62,31,INK);draw_image(b,&cross_icon,250,772,38,38);draw_text(b,305,782,account_status==4?"LINKED":"CHECK APPROVAL",3,GROUND);
     draw_round_rect(b,610,760,290,62,31,SURFACE_HI);draw_image(b,&square_icon,630,772,38,38);draw_text(b,685,782,account_status==4?"UNLINK":"NEW CODE",3,INK);
-    draw_round_rect(b,930,760,220,62,31,SURFACE_HI);draw_image(b,&circle_icon,950,772,38,38);draw_text(b,1005,782,"BACK",3,INK);
+    draw_round_rect(b,930,760,220,62,31,SURFACE_HI);draw_image(b,&circle_icon,950,772,38,38);draw_text(b,1005,782,"BACK",3,INK);if(account_status==4){draw_image(b,&options_icon,1200,772,38,38);draw_text(b,1252,782,"SYNC NOW",3,INK_2);}
 }
 static void draw_wrapped(void *b,int x,int y,const char *text,int columns,int lines){
     char line[64];const char *p=text;
@@ -544,7 +574,8 @@ static void reset_cursor(AppState *s){s->row=0;s->column=0;}
 static int route_input(AppState *s,uint32_t pressed){
     if(s->account){
         if(pressed&ORBIS_PAD_BUTTON_CIRCLE)s->account=0;
-        if((pressed&ORBIS_PAD_BUTTON_CROSS)&&account_status!=4){poll_device_link();show_toast(account_status==4?"Account linked":"Approval not received yet");}
+        if((pressed&ORBIS_PAD_BUTTON_CROSS)&&account_status!=4){poll_device_link();if(account_status==4)sync_account_data();show_toast(account_status==4?"Account linked and synced":"Approval not received yet");}
+        if((pressed&ORBIS_PAD_BUTTON_OPTIONS)&&account_status==4){sync_account_data();save_state(s);show_toast(account_sync_status==2?"Account data synced":"Account sync failed");}
         if(pressed&ORBIS_PAD_BUTTON_SQUARE){if(account_status==4){auth_key[0]=link_code[0]=0;account_status=0;save_account();show_toast("Account unlinked");}else{create_device_link();show_toast("New link code created");}}return pressed!=0;
     }
     if(s->episodes){
@@ -634,7 +665,7 @@ int main(void){
     draw_screen(canvas,&state);memcpy(buffers[0],canvas,frame_size);memcpy(buffers[1],canvas,frame_size);sceVideoOutSetFlipRate(video,0);
     result=sceVideoOutSubmitFlip(video,0,ORBIS_VIDEO_OUT_FLIP_VSYNC,1);if(result<0)park_error("sceVideoOutSubmitFlip",result);
     sceSystemServiceHideSplashScreen();
-    load_live_catalog();validate_public_domain();draw_screen(canvas,&state);memcpy(buffers[1],canvas,frame_size);sceVideoOutSubmitFlip(video,1,ORBIS_VIDEO_OUT_FLIP_VSYNC,2);
+    load_live_catalog();validate_public_domain();if(auth_key[0])sync_account_data();draw_screen(canvas,&state);memcpy(buffers[1],canvas,frame_size);sceVideoOutSubmitFlip(video,1,ORBIS_VIDEO_OUT_FLIP_VSYNC,2);
     const int pad=open_pad();if(pad<0)park_error("scePadOpen",pad);
     int active_buffer=1;int64_t flip_id=3;uint32_t previous_buttons=0;
     for(;;){OrbisPadData input={0};if(scePadReadState(pad,&input)==0){uint32_t pressed=input.buttons&~previous_buttons;previous_buttons=input.buttons;

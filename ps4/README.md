@@ -124,6 +124,12 @@ completed frames into VideoOut scanout memory. Opaque artwork bypasses alpha
 blending. This removes the direct-video-memory read/modify/write bottleneck that
 the 0.27 performance counter exposed on real PS4 hardware.
 
+Version 0.29 begins the full account-data integration used by the PS5 app. A
+linked account now imports its Stremio library through `datastoreGet`, reads the
+account addon collection, merges matching saved titles into the native Library,
+shows sync totals, refreshes automatically at startup, and supports an explicit
+Options-button resync from the account screen.
+
 The output is `dist-ps4/IV0000-BREW00991_00-STREMIOPS4000000.pkg`.
 The current package is a native 1080p VideoOut application using DualShock 4
 navigation and PS4 networking. Firmware 13.02 with GoldHEN 2.4b18.12 is the
