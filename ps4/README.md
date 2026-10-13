@@ -100,6 +100,10 @@ Version 0.23 connects Find Streams to the live Public Domain stream endpoint,
 parses real source names, sizes and info hashes, displays navigable source rows,
 and distinguishes no-match, disabled-addon, and request-failure states. Search
 now combines movie and series results in one screen.
+Version 0.24 fixes the decoded-image red/blue channel order in both standard and
+rounded blitters. Posters and packaged artwork now retain their source colours.
+It also imports the PS5 small play/check, pause, filter-chevron and large-logo
+assets for richer saved, account, Discover and stream states.
 
 The output is `dist-ps4/IV0000-BREW00991_00-STREMIOPS4000000.pkg`.
 The current package is a native 1080p VideoOut application using DualShock 4

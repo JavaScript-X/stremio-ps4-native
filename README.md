@@ -27,6 +27,9 @@ empty states, additional PS5 icons, and denser Board status presentation.
 Version 0.23 resolves selected titles against the enabled Public Domain addon,
 parses real torrent source metadata into PS5-style rows, adds source navigation
 and explicit network/no-match states, and searches movies and series together.
+Version 0.24 corrects the PS4 framebuffer channel order for all decoded PNG and
+JPEG content, imports more PS5 controls and status artwork, and adds saved-title,
+filter, account, and stream-source visual states.
 
 The upstream PS5 documentation is retained below while features are moved to
 the PS4 platform layer. PS5 installation instructions and artifacts do not

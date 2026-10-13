@@ -38,7 +38,8 @@ typedef struct AppState {
 static const char *PAGE_NAMES[PAGE_COUNT]={"Board","Discover","Library","Addons","Settings"};
 static const char *ICON_NAMES[PAGE_COUNT]={"nav_board","nav_discover","nav_library","nav_addons","nav_settings"};
 static Image logo, wordmark, search_icon, cross_icon, circle_icon, triangle_icon, square_icon, options_icon;
-static Image dpad_icon, l1_icon, r1_icon, play_icon, check_icon, chevron_icon, nav_line[PAGE_COUNT], nav_solid[PAGE_COUNT];
+static Image dpad_icon, l1_icon, r1_icon, play_icon, play_small_icon, pause_icon, check_icon, check_small_icon;
+static Image chevron_icon, chevron_down_icon, logo_large, nav_line[PAGE_COUNT], nav_solid[PAGE_COUNT];
 static unsigned char *font_atlas;static stbtt_bakedchar font_chars[96];static int font_ready;
 typedef struct CatalogCard {
     char id[24], name[40], type[12], year[16], runtime[24], rating[12], genres[96];
@@ -301,7 +302,8 @@ static void load_assets(void){
     logo=load_image("logo.png");wordmark=load_image("name.png");search_icon=load_image("search.png");
     cross_icon=load_image("cross.png");circle_icon=load_image("circle.png");triangle_icon=load_image("triangle.png");square_icon=load_image("square.png");options_icon=load_image("options.png");
     dpad_icon=load_image("dpad.png");l1_icon=load_image("l1.png");r1_icon=load_image("r1.png");play_icon=load_image("play.png");
-    check_icon=load_image("check.png");chevron_icon=load_image("chevron_right.png");char name[64];
+    play_small_icon=load_image("play_s.png");pause_icon=load_image("pause.png");check_icon=load_image("check.png");check_small_icon=load_image("check_s.png");
+    chevron_icon=load_image("chevron_right.png");chevron_down_icon=load_image("chevron_down.png");logo_large=load_image("logo_l.png");char name[64];
     for(int i=0;i<PAGE_COUNT;++i){strcpy(name,ICON_NAMES[i]);strcat(name,".png");nav_line[i]=load_image(name);
         strcpy(name,ICON_NAMES[i]);strcat(name,"_o.png");nav_solid[i]=load_image(name);}
     sceKernelDebugOutText(0,"[stremio-ps4] PS5 assets: logo=%dx%d\n",logo.width,logo.height);
@@ -313,14 +315,14 @@ static void draw_image(void *buffer,const Image *image,int x,int y,int w,int h){
             const unsigned char *s=image->pixels+((size_t)sy*image->width+sx)*4;unsigned a=s[3];if(!a)continue;
             uint32_t *d=&target[(size_t)py*WIDTH+px];unsigned dr=*d&255u,dg=(*d>>8)&255u,db=(*d>>16)&255u;
             unsigned r=(s[0]*a+dr*(255-a))/255,g=(s[1]*a+dg*(255-a))/255,b=(s[2]*a+db*(255-a))/255;
-            *d=0xff000000u|(b<<16)|(g<<8)|r;}}
+            *d=0xff000000u|(r<<16)|(g<<8)|b;}}
 }
 static void draw_image_rounded(void *buffer,const Image *image,int x,int y,int w,int h,int radius){
     if(!image->pixels||image->width<=0||image->height<=0)return;uint32_t *target=(uint32_t*)buffer;
     for(int dy=0;dy<h;++dy){int py=y+dy;if(py<0||py>=HEIGHT)continue;int sy=dy*image->height/h;for(int dx=0;dx<w;++dx){int px=x+dx;if(px<0||px>=WIDTH)continue;
         int cx=dx<radius?radius-dx-1:dx>=w-radius?dx-(w-radius):0,cy=dy<radius?radius-dy-1:dy>=h-radius?dy-(h-radius):0;if(cx&&cy&&cx*cx+cy*cy>radius*radius)continue;
         int sx=dx*image->width/w;const unsigned char *s=image->pixels+((size_t)sy*image->width+sx)*4;unsigned a=s[3];if(!a)continue;uint32_t *d=&target[(size_t)py*WIDTH+px];unsigned dr=*d&255u,dg=(*d>>8)&255u,db=(*d>>16)&255u;
-        *d=0xff000000u|(((s[2]*a+db*(255-a))/255)<<16)|(((s[1]*a+dg*(255-a))/255)<<8)|((s[0]*a+dr*(255-a))/255);}}
+        *d=0xff000000u|(((s[0]*a+db*(255-a))/255)<<16)|(((s[1]*a+dg*(255-a))/255)<<8)|((s[2]*a+dr*(255-a))/255);}}
 }
 static void draw_focus(void *b,int x,int y,int w,int h){
     draw_round_outline(b,x-8,y-8,w+16,h+16,24,4,0xff704bddu);
@@ -332,6 +334,7 @@ static void draw_card(void *b,int x,int y,int w,int h,int seed,int focused,const
     if(seed<15&&live_cards[seed].poster.pixels)draw_image_rounded(b,&live_cards[seed].poster,x,y,w,poster_h,18);
     char shown[21]={0};strncpy(shown,title,sizeof(shown)-1);int scale=strlen(shown)>12?2:3;
     draw_text(b,x,y+poster_h+20,shown,scale,focused?INK:INK_2);if(focused)draw_focus(b,x,y,w,poster_h);
+    if(seed<15&&live_cards[seed].saved){draw_round_rect(b,x+w-48,y+12,36,36,18,0xff65b322u);draw_image(b,&check_small_icon,x+w-40,y+20,20,20);}
 }
 static void draw_rail(void *b,const AppState *s){
     draw_vgradient(b,0,0,140,HEIGHT,0xff211724u,0xff100d12u);if(logo.pixels)draw_image(b,&logo,40,28,60,60);else draw_text(b,36,42,"S",7,ACCENT_SOFT);
@@ -362,7 +365,7 @@ static void draw_board(void *b,const AppState *s){
 static void draw_discover(void *b,const AppState *s){
     draw_text(b,190,154,"Discover",6,INK_2);const char *filters[]={"Movies","Popular","All genres"};
     filters[0]=s->discover_series?"Series":"Movies";
-    for(int i=0;i<3;++i){draw_round_rect(b,190+i*330,228,300,66,33,i==0?0xff563aa7u:SURFACE);draw_text(b,224+i*330,248,filters[i],3,INK);}
+    for(int i=0;i<3;++i){draw_round_rect(b,190+i*330,228,300,66,33,i==0?0xff563aa7u:SURFACE);draw_text(b,224+i*330,248,filters[i],3,INK);draw_image(b,&chevron_down_icon,438+i*330,247,24,24);}
     const char *titles[]={"ACTION","DRAMA","COMEDY","THRILLER","FAMILY"};
     int first=s->discover_series?5:0;
     for(int i=0;i<5;++i){int index=first+i;draw_card(b,190+i*290,370,250,360,index,!s->rail_focus&&s->column==i,catalog_status==2&&index<catalog_count?live_cards[index].name:titles[i]);}
@@ -403,7 +406,7 @@ static void draw_settings(void *b,const AppState *s){
 }
 static void draw_account(void *b,const AppState *s){
     (void)s;draw_text(b,190,140,"Stremio account",6,INK_2);draw_text(b,190,205,"Link this PS4 to your Stremio account",3,INK_3);
-    draw_round_rect(b,190,270,1420,430,34,SURFACE);draw_round_rect(b,230,310,180,180,36,0xff3d2a73u);draw_image(b,&logo,280,360,80,80);
+    draw_round_rect(b,190,270,1420,430,34,SURFACE);draw_round_rect(b,230,310,180,180,36,0xff3d2a73u);draw_image(b,logo_large.pixels?&logo_large:&logo,270,350,100,100);
     if(account_status==4){draw_round_rect(b,460,320,270,48,24,0xff315d3fu);draw_text(b,500,334,"ACCOUNT LINKED",3,0xff8cffaau);
         draw_text(b,460,410,"WELCOME BACK",6,INK);draw_text(b,460,500,"YOUR SECURE ACCOUNT KEY IS SAVED LOCALLY",3,INK_2);draw_text(b,460,550,"LIBRARY AND ADDON SYNC IS BEING PREPARED",3,INK_3);}
     else {draw_text(b,460,330,account_status==1?"CREATING CODE":account_status==3?"CHECKING APPROVAL":account_status==5?"LINK SERVICE UNAVAILABLE":"ENTER THIS CODE",4,INK_2);
@@ -431,6 +434,7 @@ static void draw_detail(void *b,const AppState *s){
     draw_text(b,1340,390,"Released",2,INK_3);draw_text(b,1480,387,card->year,3,INK_2);draw_text(b,1340,450,"Runtime",2,INK_3);draw_text(b,1480,447,card->runtime,3,INK_2);
     draw_text(b,1340,510,"Rating",2,INK_3);draw_text(b,1480,507,card->rating,3,0xff18c5f5u);
     draw_round_rect(b,610,790,440,80,40,0xff563aa7u);draw_image(b,&play_icon,638,808,44,44);draw_text(b,706,818,"FIND STREAMS",4,INK);
+    if(card->saved){draw_round_rect(b,1080,790,260,80,40,0xff315d3fu);draw_image(b,&check_icon,1105,810,40,40);draw_text(b,1160,818,"SAVED",4,0xff8cffaau);}
     draw_image(b,&cross_icon,610,902,38,38);draw_text(b,660,912,"STREAMS",3,INK_2);
     draw_image(b,&square_icon,830,902,38,38);draw_text(b,880,912,card->saved?"REMOVE":"SAVE",3,INK_2);
     draw_image(b,&circle_icon,1090,902,38,38);draw_text(b,1140,912,"BACK",3,INK_2);
@@ -442,7 +446,7 @@ static void draw_streams(void *b,const AppState *s){
         for(int i=0;i<stream_count&&i<5;++i){int y=290+i*120,focused=i==s->stream_cursor;StreamSource *source=&stream_sources[i];
             draw_round_rect(b,190,y,1420,96,26,focused?SURFACE_HI:SURFACE);draw_round_rect(b,220,y+20,120,56,18,0xff563aa7u);
             draw_text(b,245,y+36,source->name[0]?source->name:"SOURCE",3,INK);draw_text(b,380,y+24,"Public Domain Movies",4,INK);
-            draw_text(b,380,y+62,source->title[0]?source->title:"Torrent source",3,INK_3);draw_text(b,1360,y+38,"READY",3,ACCENT_SOFT);
+            draw_text(b,380,y+62,source->title[0]?source->title:"Torrent source",3,INK_3);draw_image(b,&play_small_icon,1320,y+34,28,28);draw_text(b,1360,y+38,"READY",3,ACCENT_SOFT);
             if(focused)draw_focus(b,190,y,1420,96);}
         draw_image(b,&cross_icon,190,920,38,38);draw_text(b,244,930,stream_status==6?"PLAYER IN DEVELOPMENT":"SELECT SOURCE",3,INK_2);
     }else {draw_round_rect(b,190,300,1420,280,32,SURFACE);
