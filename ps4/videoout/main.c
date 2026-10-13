@@ -32,8 +32,8 @@ static const uint32_t ACCENT=0xfff55b7bu, ACCENT_SOFT=0xffff8ba5u;
 static const uint32_t INK=0xfff7f7f7u, INK_2=0xffc8c8c8u, INK_3=0xff8f8f8fu;
 typedef struct Image { unsigned char *pixels; int width, height; } Image;
 typedef struct AppState {
-    int page, rail_focus, row, column, search, detail, streams, detail_index;
-    int keyboard, search_cursor, result_focus, discover_series, account, stream_cursor; char query[24]; int settings[4];
+    int page, rail_focus, row, column, search, detail, streams, episodes, detail_index;
+    int keyboard, search_cursor, result_focus, discover_series, account, stream_cursor, episode_cursor, season; char query[24]; int settings[4];
 } AppState;
 static const char *PAGE_NAMES[PAGE_COUNT]={"Board","Discover","Library","Addons","Settings"};
 static const char *ICON_NAMES[PAGE_COUNT]={"nav_board","nav_discover","nav_library","nav_addons","nav_settings"};
@@ -48,6 +48,8 @@ typedef struct CatalogCard {
 static CatalogCard live_cards[15];
 typedef struct StreamSource {char name[32],title[96],info_hash[64];int file_index;} StreamSource;
 static StreamSource stream_sources[8];static int stream_count,stream_status;
+typedef struct Episode {char id[40],name[64],description[256];int season,number;} Episode;
+static Episode episodes[80];static int episode_count,max_season;static char episode_series_id[24],selected_video_id[40];
 static int catalog_count;
 static int search_count, search_status;
 static char saved_ids[15][24];static int saved_id_count;
@@ -208,10 +210,22 @@ static void load_metadata(CatalogCard *card){
     if((v=strstr(p,"\"imdbRating\":\"")))json_value(v,"\"imdbRating\":\"",card->rating,sizeof(card->rating),1);
     parse_genres(p,card->genres,sizeof(card->genres));card->metadata_loaded=1;free(json);
 }
+static void load_episode_catalog(CatalogCard *card){
+    if(!strcmp(episode_series_id,card->id)&&episode_count)return;episode_count=max_season=0;episode_series_id[0]=0;
+    char url[256];snprintf(url,sizeof(url),"https://v3-cinemeta.strem.io/meta/series/%s.json",card->id);size_t size=0;unsigned char *json=http_get(url,2*1024*1024,&size);if(!json)return;
+    const char *p=(char*)json,*videos=strstr(p,"\"videos\":[");if(videos)p=videos;
+    while(episode_count<80&&(p=strstr(p,"\"name\":\""))){const char *season=strstr(p,"\"season\":");if(!season||season-p>800)break;int s=atoi(season+9);const char *number=strstr(season,"\"number\":");const char *id=strstr(season,"\"id\":\"");
+        if(s>0&&number&&id&&number-season<100&&id-season<700){Episode *e=&episodes[episode_count++];json_value(p,"\"name\":\"",e->name,sizeof(e->name),0);e->season=s;e->number=atoi(number+9);json_value(id,"\"id\":\"",e->id,sizeof(e->id),0);
+            const char *description=strstr(id,"\"description\":\"");if(description&&description-id<800)json_value(description,"\"description\":\"",e->description,sizeof(e->description),0);if(s>max_season)max_season=s;}
+        p=season+10;}
+    strncpy(episode_series_id,card->id,sizeof(episode_series_id)-1);free(json);
+}
+static int first_episode_in_season(int season){for(int i=0;i<episode_count;++i)if(episodes[i].season==season)return i;return -1;}
 static void load_stream_sources(CatalogCard *card){
     stream_count=0;stream_status=1;memset(stream_sources,0,sizeof(stream_sources));
     if(!public_domain_enabled||!public_domain_online){stream_status=4;return;}char url[512];
-    snprintf(url,sizeof(url),"https://caching.stremio.net/publicdomainmovies.now.sh/stream/%s/%s.json",!strcmp(card->type,"SERIES")?"series":"movie",card->id);
+    const char *id=!strcmp(card->type,"SERIES")&&selected_video_id[0]?selected_video_id:card->id;
+    snprintf(url,sizeof(url),"https://caching.stremio.net/publicdomainmovies.now.sh/stream/%s/%s.json",!strcmp(card->type,"SERIES")?"series":"movie",id);
     size_t size=0;unsigned char *json=http_get(url,512*1024,&size);if(!json){stream_status=5;return;}const char *p=(char*)json;
     while(stream_count<8&&(p=strstr(p,"\"infoHash\":\""))){StreamSource *source=&stream_sources[stream_count];
         const char *next=json_value(p,"\"infoHash\":\"",source->info_hash,sizeof(source->info_hash),0);const char *v;
@@ -433,11 +447,24 @@ static void draw_detail(void *b,const AppState *s){
     draw_round_rect(b,1300,220,430,380,30,SURFACE);draw_text(b,1340,260,"About",4,INK);draw_text(b,1340,330,"Type",2,INK_3);draw_text(b,1480,327,card->type,3,INK_2);
     draw_text(b,1340,390,"Released",2,INK_3);draw_text(b,1480,387,card->year,3,INK_2);draw_text(b,1340,450,"Runtime",2,INK_3);draw_text(b,1480,447,card->runtime,3,INK_2);
     draw_text(b,1340,510,"Rating",2,INK_3);draw_text(b,1480,507,card->rating,3,0xff18c5f5u);
-    draw_round_rect(b,610,790,440,80,40,0xff563aa7u);draw_image(b,&play_icon,638,808,44,44);draw_text(b,706,818,"FIND STREAMS",4,INK);
+    draw_round_rect(b,610,790,440,80,40,0xff563aa7u);draw_image(b,&play_icon,638,808,44,44);draw_text(b,706,818,!strcmp(card->type,"SERIES")?"CHOOSE EPISODE":"FIND STREAMS",4,INK);
     if(card->saved){draw_round_rect(b,1080,790,260,80,40,0xff315d3fu);draw_image(b,&check_icon,1105,810,40,40);draw_text(b,1160,818,"SAVED",4,0xff8cffaau);}
     draw_image(b,&cross_icon,610,902,38,38);draw_text(b,660,912,"STREAMS",3,INK_2);
     draw_image(b,&square_icon,830,902,38,38);draw_text(b,880,912,card->saved?"REMOVE":"SAVE",3,INK_2);
     draw_image(b,&circle_icon,1090,902,38,38);draw_text(b,1140,912,"BACK",3,INK_2);
+}
+static void draw_episodes(void *b,const AppState *s){
+    CatalogCard *card=&live_cards[s->detail_index];draw_text(b,190,140,card->name,6,INK);draw_text(b,190,205,"Episodes",4,ACCENT_SOFT);
+    draw_round_rect(b,190,255,1420,74,37,SURFACE);draw_image(b,&l1_icon,220,272,40,40);char season[32];snprintf(season,sizeof(season),"Season %d",s->season);
+    draw_text(b,300,274,season,4,INK);draw_image(b,&r1_icon,1510,272,40,40);char count[32];int total=0;for(int i=0;i<episode_count;++i)if(episodes[i].season==s->season)++total;
+    snprintf(count,sizeof(count),"%d episodes",total);draw_text(b,1260,278,count,3,INK_3);
+    if(!episode_count){draw_round_rect(b,190,370,1420,190,30,SURFACE);draw_text(b,250,430,"Episode data is unavailable",5,INK);draw_text(b,250,500,"Return to details and try again",3,INK_3);}
+    else {int ordinal=0;for(int i=0;i<s->episode_cursor;++i)if(episodes[i].season==s->season)++ordinal;int skip=ordinal>5?ordinal-5:0,seen=0,visible=0;
+        for(int i=0;i<episode_count&&visible<6;++i)if(episodes[i].season==s->season){if(seen++<skip)continue;int y=360+visible*100,focused=i==s->episode_cursor;draw_round_rect(b,190,y,1420,82,24,focused?SURFACE_HI:SURFACE);
+            char number[20];snprintf(number,sizeof(number),"E%d",episodes[i].number);draw_round_rect(b,215,y+18,78,46,16,0xff563aa7u);draw_text(b,235,y+30,number,3,INK);
+            draw_text(b,330,y+18,episodes[i].name,4,focused?INK:INK_2);char short_description[76]={0};strncpy(short_description,episodes[i].description,sizeof(short_description)-1);draw_text(b,330,y+54,short_description,2,INK_3);
+            draw_image(b,&play_small_icon,1535,y+27,28,28);if(focused)draw_focus(b,190,y,1420,82);++visible;}}
+    draw_image(b,&cross_icon,190,950,38,38);draw_text(b,244,960,"FIND STREAMS",3,INK_2);draw_image(b,&circle_icon,1240,950,38,38);draw_text(b,1294,960,"BACK TO DETAILS",3,INK_2);
 }
 static void draw_streams(void *b,const AppState *s){
     CatalogCard *card=&live_cards[s->detail_index];draw_text(b,190,140,"STREAM SOURCES",6,INK);
@@ -483,6 +510,7 @@ static void draw_footer(void *b,const AppState *s){
 static void draw_screen(void *b,const AppState *s){
     draw_page_backdrop(b);draw_rail(b,s);draw_topbar(b,s);
     if(s->account)draw_account(b,s);
+    else if(s->episodes)draw_episodes(b,s);
     else if(s->streams)draw_streams(b,s);
     else if(s->detail)draw_detail(b,s);
     else if(s->search)draw_search(b,s);
@@ -501,6 +529,15 @@ static int route_input(AppState *s,uint32_t pressed){
         if((pressed&ORBIS_PAD_BUTTON_CROSS)&&account_status!=4)poll_device_link();
         if(pressed&ORBIS_PAD_BUTTON_SQUARE){if(account_status==4){auth_key[0]=link_code[0]=0;account_status=0;save_account();}else create_device_link();}return pressed!=0;
     }
+    if(s->episodes){
+        if(pressed&ORBIS_PAD_BUTTON_CIRCLE){s->episodes=0;return 1;}
+        if(pressed&ORBIS_PAD_BUTTON_L1){for(int season=s->season-1;season>=1;--season){int first=first_episode_in_season(season);if(first>=0){s->season=season;s->episode_cursor=first;break;}}}
+        if(pressed&ORBIS_PAD_BUTTON_R1){for(int season=s->season+1;season<=max_season;++season){int first=first_episode_in_season(season);if(first>=0){s->season=season;s->episode_cursor=first;break;}}}
+        if(pressed&ORBIS_PAD_BUTTON_UP){for(int i=s->episode_cursor-1;i>=0;--i)if(episodes[i].season==s->season){s->episode_cursor=i;break;}}
+        if(pressed&ORBIS_PAD_BUTTON_DOWN){for(int i=s->episode_cursor+1;i<episode_count;++i)if(episodes[i].season==s->season){s->episode_cursor=i;break;}}
+        if((pressed&ORBIS_PAD_BUTTON_CROSS)&&episode_count){strncpy(selected_video_id,episodes[s->episode_cursor].id,sizeof(selected_video_id)-1);load_stream_sources(&live_cards[s->detail_index]);s->streams=1;s->episodes=0;s->stream_cursor=0;}
+        return pressed!=0;
+    }
     if(s->streams){
         if(pressed&ORBIS_PAD_BUTTON_CIRCLE)s->streams=0;
         if(stream_count){if((pressed&ORBIS_PAD_BUTTON_UP)&&s->stream_cursor>0)--s->stream_cursor;if((pressed&ORBIS_PAD_BUTTON_DOWN)&&s->stream_cursor<stream_count-1)++s->stream_cursor;
@@ -509,7 +546,9 @@ static int route_input(AppState *s,uint32_t pressed){
     }
     if(s->detail){
         if(pressed&ORBIS_PAD_BUTTON_CIRCLE)s->detail=0;
-        if(pressed&ORBIS_PAD_BUTTON_CROSS){s->stream_cursor=0;load_stream_sources(&live_cards[s->detail_index]);s->streams=1;}
+        if(pressed&ORBIS_PAD_BUTTON_CROSS){CatalogCard *card=&live_cards[s->detail_index];s->stream_cursor=0;selected_video_id[0]=0;
+            if(!strcmp(card->type,"SERIES")){load_episode_catalog(card);s->season=1;s->episode_cursor=first_episode_in_season(1);if(s->episode_cursor<0){s->season=max_season;s->episode_cursor=first_episode_in_season(max_season);}s->episodes=1;}
+            else {load_stream_sources(card);s->streams=1;}}
         if(pressed&ORBIS_PAD_BUTTON_SQUARE){live_cards[s->detail_index].saved^=1;save_state(s);}
         return pressed!=0;
     }

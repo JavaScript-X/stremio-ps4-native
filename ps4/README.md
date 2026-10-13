@@ -104,6 +104,10 @@ Version 0.24 fixes the decoded-image red/blue channel order in both standard and
 rounded blitters. Posters and packaged artwork now retain their source colours.
 It also imports the PS5 small play/check, pause, filter-chevron and large-logo
 assets for richer saved, account, Discover and stream states.
+Version 0.25 adds a native series episode browser backed by live Cinemeta video
+metadata. Series now open season and episode selection before streams, support
+L1/R1 season switching and scrolling D-pad navigation, and resolve addons with
+the selected episode's full Stremio video id.
 
 The output is `dist-ps4/IV0000-BREW00991_00-STREMIOPS4000000.pkg`.
 The current package is a native 1080p VideoOut application using DualShock 4

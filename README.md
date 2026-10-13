@@ -30,6 +30,9 @@ and explicit network/no-match states, and searches movies and series together.
 Version 0.24 corrects the PS4 framebuffer channel order for all decoded PNG and
 JPEG content, imports more PS5 controls and status artwork, and adds saved-title,
 filter, account, and stream-source visual states.
+Version 0.25 adds the complete native series-selection path: live Cinemeta
+season/episode parsing, a PS5-style episode list, L1/R1 season switching,
+scrolling episode navigation, and episode-specific addon stream resolution.
 
 The upstream PS5 documentation is retained below while features are moved to
 the PS4 platform layer. PS5 installation instructions and artifacts do not
