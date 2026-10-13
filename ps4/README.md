@@ -119,6 +119,11 @@ Settings now includes a native measured FPS/frame-time overlay. GoldHEN's Game
 Overlay remains separately compatible through the standard VideoOut flip path;
 the app does not install a competing SubmitFlip hook.
 
+Version 0.28 moves software composition into cacheable CPU memory and copies only
+completed frames into VideoOut scanout memory. Opaque artwork bypasses alpha
+blending. This removes the direct-video-memory read/modify/write bottleneck that
+the 0.27 performance counter exposed on real PS4 hardware.
+
 The output is `dist-ps4/IV0000-BREW00991_00-STREMIOPS4000000.pkg`.
 The current package is a native 1080p VideoOut application using DualShock 4
 navigation and PS4 networking. Firmware 13.02 with GoldHEN 2.4b18.12 is the

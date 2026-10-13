@@ -46,7 +46,7 @@ endif
 
 ifeq ($(BUILD_MODE),videoout)
 TITLE       := Stremio PS4
-VERSION     := 0.27
+VERSION     := 0.28
 SOURCE      := videoout/main.c
 OBJECT      := $(OBJDIR)/videoout.o
 LIBS        := -lc -lm -lkernel -lSceVideoOut -lSceSystemService -lScePad -lSceUserService \

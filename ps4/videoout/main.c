@@ -332,7 +332,7 @@ static void draw_image(void *buffer,const Image *image,int x,int y,int w,int h){
     for(int dy=0;dy<h;++dy){int py=y+dy;if(py<0||py>=HEIGHT)continue;int sy=dy*image->height/h;
         for(int dx=0;dx<w;++dx){int px=x+dx;if(px<0||px>=WIDTH)continue;int sx=dx*image->width/w;
             const unsigned char *s=image->pixels+((size_t)sy*image->width+sx)*4;unsigned a=s[3];if(!a)continue;
-            uint32_t *d=&target[(size_t)py*WIDTH+px];unsigned dr=*d&255u,dg=(*d>>8)&255u,db=(*d>>16)&255u;
+            uint32_t *d=&target[(size_t)py*WIDTH+px];if(a==255){*d=0xff000000u|((uint32_t)s[0]<<16)|((uint32_t)s[1]<<8)|s[2];continue;}unsigned dr=*d&255u,dg=(*d>>8)&255u,db=(*d>>16)&255u;
             unsigned r=(s[0]*a+dr*(255-a))/255,g=(s[1]*a+dg*(255-a))/255,b=(s[2]*a+db*(255-a))/255;
             *d=0xff000000u|(r<<16)|(g<<8)|b;}}
 }
@@ -340,7 +340,7 @@ static void draw_image_rounded(void *buffer,const Image *image,int x,int y,int w
     if(!image->pixels||image->width<=0||image->height<=0)return;uint32_t *target=(uint32_t*)buffer;
     for(int dy=0;dy<h;++dy){int py=y+dy;if(py<0||py>=HEIGHT)continue;int sy=dy*image->height/h;for(int dx=0;dx<w;++dx){int px=x+dx;if(px<0||px>=WIDTH)continue;
         int cx=dx<radius?radius-dx-1:dx>=w-radius?dx-(w-radius):0,cy=dy<radius?radius-dy-1:dy>=h-radius?dy-(h-radius):0;if(cx&&cy&&cx*cx+cy*cy>radius*radius)continue;
-        int sx=dx*image->width/w;const unsigned char *s=image->pixels+((size_t)sy*image->width+sx)*4;unsigned a=s[3];if(!a)continue;uint32_t *d=&target[(size_t)py*WIDTH+px];unsigned dr=*d&255u,dg=(*d>>8)&255u,db=(*d>>16)&255u;
+        int sx=dx*image->width/w;const unsigned char *s=image->pixels+((size_t)sy*image->width+sx)*4;unsigned a=s[3];if(!a)continue;uint32_t *d=&target[(size_t)py*WIDTH+px];if(a==255){*d=0xff000000u|((uint32_t)s[0]<<16)|((uint32_t)s[1]<<8)|s[2];continue;}unsigned dr=*d&255u,dg=(*d>>8)&255u,db=(*d>>16)&255u;
         *d=0xff000000u|(((s[0]*a+db*(255-a))/255)<<16)|(((s[1]*a+dg*(255-a))/255)<<8)|((s[2]*a+dr*(255-a))/255);}}
 }
 static void draw_image_alpha(void *buffer,const Image *image,int x,int y,int w,int h,unsigned opacity){
@@ -627,14 +627,14 @@ int main(void){
     off_t direct_offset=0;int result=sceKernelAllocateDirectMemory(0,sceKernelGetDirectMemorySize(),allocation_size,alignment,3,&direct_offset);
     if(result<0)park_error("sceKernelAllocateDirectMemory",result);void *video_memory=0;
     result=sceKernelMapDirectMemory(&video_memory,allocation_size,0x33,0,direct_offset,alignment);if(result<0)park_error("sceKernelMapDirectMemory",result);
-    void *buffers[BUFFER_COUNT]={video_memory,(uint8_t*)video_memory+frame_size};OrbisVideoOutBufferAttribute attribute;
+    void *buffers[BUFFER_COUNT]={video_memory,(uint8_t*)video_memory+frame_size};void *canvas=malloc(frame_size);if(!canvas)park_error("malloc canvas",-1);OrbisVideoOutBufferAttribute attribute;
     sceVideoOutSetBufferAttribute(&attribute,0x80000000,1,0,WIDTH,HEIGHT,WIDTH);
     result=sceVideoOutRegisterBuffers(video,0,buffers,BUFFER_COUNT,&attribute);if(result<0)park_error("sceVideoOutRegisterBuffers",result);
     load_assets();AppState state={0};for(int i=0;i<5;++i)state.settings[i]=1;load_state(&state);load_account();catalog_status=1;
-    draw_screen(buffers[0],&state);draw_screen(buffers[1],&state);sceVideoOutSetFlipRate(video,0);
+    draw_screen(canvas,&state);memcpy(buffers[0],canvas,frame_size);memcpy(buffers[1],canvas,frame_size);sceVideoOutSetFlipRate(video,0);
     result=sceVideoOutSubmitFlip(video,0,ORBIS_VIDEO_OUT_FLIP_VSYNC,1);if(result<0)park_error("sceVideoOutSubmitFlip",result);
     sceSystemServiceHideSplashScreen();
-    load_live_catalog();validate_public_domain();draw_screen(buffers[1],&state);sceVideoOutSubmitFlip(video,1,ORBIS_VIDEO_OUT_FLIP_VSYNC,2);
+    load_live_catalog();validate_public_domain();draw_screen(canvas,&state);memcpy(buffers[1],canvas,frame_size);sceVideoOutSubmitFlip(video,1,ORBIS_VIDEO_OUT_FLIP_VSYNC,2);
     const int pad=open_pad();if(pad<0)park_error("scePadOpen",pad);
     int active_buffer=1;int64_t flip_id=3;uint32_t previous_buttons=0;
     for(;;){OrbisPadData input={0};if(scePadReadState(pad,&input)==0){uint32_t pressed=input.buttons&~previous_buttons;previous_buttons=input.buttons;
@@ -642,6 +642,6 @@ int main(void){
         int toast_expired=0;if(toast_frames>0){--toast_frames;if(toast_frames==0)toast_expired=1;}
         if(changed>0||animation_frames>0||toast_expired){if(animation_frames>0)--animation_frames;++ui_phase;struct timespec now;if(clock_gettime(CLOCK_MONOTONIC,&now)==0){uint64_t ns=(uint64_t)now.tv_sec*1000000000ull+(uint64_t)now.tv_nsec;
                 if(last_flip_ns&&ns>last_flip_ns&&ns-last_flip_ns<500000000ull){float ms=(float)(ns-last_flip_ns)/1000000.0f;measured_frame_ms=measured_frame_ms?measured_frame_ms*0.7f+ms*0.3f:ms;measured_fps=1000.0f/measured_frame_ms;}last_flip_ns=ns;}
-            active_buffer^=1;draw_screen(buffers[active_buffer],&state);sceVideoOutSubmitFlip(video,active_buffer,ORBIS_VIDEO_OUT_FLIP_VSYNC,flip_id++);}}
+            active_buffer^=1;draw_screen(canvas,&state);memcpy(buffers[active_buffer],canvas,frame_size);sceVideoOutSubmitFlip(video,active_buffer,ORBIS_VIDEO_OUT_FLIP_VSYNC,flip_id++);}}
         sceKernelUsleep(16000);}
 }
