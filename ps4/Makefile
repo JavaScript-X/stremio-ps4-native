@@ -46,7 +46,7 @@ endif
 
 ifeq ($(BUILD_MODE),videoout)
 TITLE       := Stremio PS4
-VERSION     := 0.33
+VERSION     := 0.34
 SOURCE      := videoout/main.c
 OBJECT      := $(OBJDIR)/videoout.o
 EXTRA_OBJECTS := $(OBJDIR)/protocol.o $(OBJDIR)/stremio.o $(OBJDIR)/util.o $(OBJDIR)/subtitles.o $(OBJDIR)/bidi.o $(OBJDIR)/torrent_backend.o $(OBJDIR)/torrent_engine.o $(OBJDIR)/bencode.o $(OBJDIR)/playback.o $(OBJDIR)/video_convert.o

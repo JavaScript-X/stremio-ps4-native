@@ -70,6 +70,11 @@ file callback ABI, so the existing hardware decoder, seeking, subtitles,
 audio-track switching, resume and autoplay paths are shared by direct and
 torrent sources. Peer count, transfer rate and buffered-file progress appear
 in the player overlay. This backend requires real-console swarm testing.
+Version 0.34 hardens that first hardware-test backend after a torrent-start
+crash: the PS4 profile now limits peer fan-out and memory pressure, enlarges
+the native network pool, disables unused inbound networking and DHT bootstrap,
+avoids an empty-poll edge case, contains worker exceptions, and records startup
+phases in `/data/stremio-torrent-status.log`.
 
 The upstream PS5 documentation is retained below while features are moved to
 the PS4 platform layer. PS5 installation instructions and artifacts do not

@@ -165,6 +165,12 @@ through the same player path. The player overlay reports peers, download rate
 and selected-file progress. HTTP tracker announces and DHT remain follow-up
 PS4 networking work; UDP trackers plus peer exchange are active in this build.
 
+Version 0.34 is the first torrent crash-fix build. It reduces the PS5 engine's
+connection fan-out to a PS4-safe profile, expands the SceNet pool, removes the
+inbound listener and unused DHT-bootstrap work, bounds torrent memory more
+tightly, and catches worker/setup exceptions. Torrent startup milestones are
+appended to `/data/stremio-torrent-status.log` for hardware diagnosis.
+
 The output is `dist-ps4/IV0000-BREW00991_00-STREMIOPS4000000.pkg`.
 The current package is a native 1080p VideoOut application using DualShock 4
 navigation and PS4 networking. Firmware 13.02 with GoldHEN 2.4b18.12 is the

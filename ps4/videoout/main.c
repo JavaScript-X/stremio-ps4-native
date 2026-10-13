@@ -127,7 +127,7 @@ static int network_init(void){
     if(sceSysmoduleLoadModuleInternal(ORBIS_SYSMODULE_INTERNAL_HTTP)<0)return 0;
     if(sceSysmoduleLoadModuleInternal(ORBIS_SYSMODULE_INTERNAL_SSL)<0)return 0;
     sceNetInit();
-    net_pool=sceNetPoolCreate("stremio_net",256*1024,0);if(net_pool<0)return 0;
+    net_pool=sceNetPoolCreate("stremio_net",2*1024*1024,0);if(net_pool<0)return 0;
     ssl_context=sceSslInit(SSL_POOLSIZE);if(ssl_context<0)return 0;
     http_context=sceHttpInit(net_pool,ssl_context,LIBHTTP_POOLSIZE);return http_context>=0;
 }

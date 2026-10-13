@@ -56,6 +56,20 @@ namespace bt {
 namespace {
 
 const int kBlock = 16 * 1024;
+#ifdef PLATFORM_PS4
+const int kMaxPeers = 20;            // protect the smaller PS4 net pool
+const int kMaxConnecting = 10;
+const int64_t kMaxReadahead = 384ll << 20;
+const int64_t kMaxActiveBytes = 32ll << 20;
+const int64_t kMaxRamCache = 64ll << 20;
+const int kTrackerThreads = 1;
+const double kConnectTimeout = 4;
+const double kHandshakeTimeout = 15;
+const double kRequestTimeout = 15;
+const double kChokedTimeout = 60;
+const uint32_t kMaxMessage = 2u << 20;
+const double kPauseAfter = 45;
+#else
 const int kMaxPeers = 80;            // connected at once
 // Most addresses from trackers and the DHT never answer (gone, or behind a
 // router): try many at once and give up on each soon, so the few that work
@@ -74,6 +88,7 @@ const int64_t kMaxActiveBytes = 128ll << 20;  // pieces being assembled in memor
 const int64_t kMaxRamCache = 384ll << 20;     // when the cache file can't be used
 const double kPauseAfter = 45;       // no reader for this long: stop downloading
 const int kTrackerThreads = 2;
+#endif
 const int kExtMetadata = 1, kExtPex = 2;  // our extension message ids (BEP 10)
 
 const char* kDefaultTrackers[] = {
@@ -1473,7 +1488,9 @@ void net_loop() {
 					who.push_back({t.get(), p.get()});
 				}
 		}
-		int n = poll(fds.data(), nfds_t(fds.size()), 50);
+		int n = 0;
+		if (fds.empty()) usleep(50000);
+		else n = poll(fds.data(), nfds_t(fds.size()), 50);
 		if (n < 0 && errno != EINTR) usleep(20000);
 
 		std::lock_guard<std::mutex> lock(I.mu);
@@ -1730,7 +1747,9 @@ void tracker_worker(std::shared_ptr<Torrent> t, int worker) {
 	// One-time set-up, beside the first announces: the router mapping first
 	// (so the trackers get a port that works), the DHT's first nodes.
 	if (worker == 0 && !impl().map_started.exchange(true)) map_port();
+#ifdef HAVE_DHT
 	if (worker == kTrackerThreads - 1 && !impl().boot_started.exchange(true)) resolve_bootstrap();
+#endif
 	int round = 0;
 	while (!tp->stopped) {
 		std::vector<std::string> list;
@@ -1780,8 +1799,10 @@ void ensure_running() {
 	std::string pid(id);
 	for (int i = 0; i < 12; i++) pid += al[r[i] % 36];
 	I.peer_id = pid;
+#ifndef PLATFORM_PS4
 	if (I.listen_fd < 0) open_listener();
-	I.net = std::thread(net_loop);
+#endif
+	I.net = std::thread([] { try { net_loop(); } catch (const std::exception& e) { dlog("torrent: network thread exception: %s", e.what()); } catch (...) { dlog("torrent: network thread exception"); } });
 }
 
 }  // namespace
@@ -1859,7 +1880,7 @@ void Engine::start(const std::string& hex_in, const std::vector<std::string>& tr
 	}
 	dlog("torrent %s: starting with %zu trackers", hex.c_str(), trackers.size());
 	I.torrents.push_back(t);
-	for (int w = 0; w < kTrackerThreads; w++) t->tracker_threads.emplace_back(tracker_worker, t, w);
+	for (int w = 0; w < kTrackerThreads; w++) t->tracker_threads.emplace_back([t,w] { try { tracker_worker(t,w); } catch (const std::exception& e) { dlog("torrent: tracker thread exception: %s", e.what()); } catch (...) { dlog("torrent: tracker thread exception"); } });
 }
 
 bool Engine::wait_metadata(const std::string& hex, std::vector<FileInfo>& files, const std::atomic<bool>* cancel,
