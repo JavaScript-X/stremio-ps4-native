@@ -180,6 +180,11 @@ confirmation on console. The log now distinguishes engine setup, network
 worker creation/entry, tracker worker creation/entry, metadata wait and AVPlayer
 file open.
 
+Version 0.36 avoids the PS4 timed condition-variable wait while awaiting torrent
+metadata, using bounded 200 ms polling with a 45-second timeout and progress
+markers instead. UDP tracker diagnostics now distinguish DNS, socket, connect,
+and announce failures. Console acceptance remains pending.
+
 The output is `dist-ps4/IV0000-BREW00991_00-STREMIOPS4000000.pkg`.
 The current package is a native 1080p VideoOut application using DualShock 4
 navigation and PS4 networking. Firmware 13.02 with GoldHEN 2.4b18.12 is the

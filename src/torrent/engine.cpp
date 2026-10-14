@@ -1647,13 +1647,21 @@ bool announce_udp(Torrent* t, const std::string& url, bool first, std::vector<so
 	addrinfo hints{}, *res = nullptr;
 	hints.ai_family = AF_INET;
 	hints.ai_socktype = SOCK_DGRAM;
-	if (getaddrinfo(host.c_str(), port.c_str(), &hints, &res) != 0 || !res) return false;
+	int dns = getaddrinfo(host.c_str(), port.c_str(), &hints, &res);
+	if (dns != 0 || !res) {
+		dlog("tracker %s: DNS failed (%d: %s)", host.c_str(), dns, gai_strerror(dns));
+		return false;
+	}
 	sockaddr_in to = *reinterpret_cast<sockaddr_in*>(res->ai_addr);
 	freeaddrinfo(res);
 	int fd = socket(AF_INET, SOCK_DGRAM, 0);
-	if (fd < 0) return false;
+	if (fd < 0) {
+		dlog("tracker %s: UDP socket failed (errno %d)", host.c_str(), errno);
+		return false;
+	}
 	bool ok = false;
-	if (connect(fd, reinterpret_cast<sockaddr*>(&to), sizeof(to)) == 0) {
+	int connected = connect(fd, reinterpret_cast<sockaddr*>(&to), sizeof(to));
+	if (connected == 0) {
 		uint32_t tid;
 		random_bytes(&tid, 4);
 		std::string req;
@@ -1685,9 +1693,9 @@ bool announce_udp(Torrent* t, const std::string& url, bool first, std::vector<so
 				*interval = int(be32(resp.data() + 8));
 				parse_compact(resp.substr(20), peers);
 				ok = true;
-			}
-		}
-	}
+			} else dlog("tracker %s: announce transaction failed (errno %d)", host.c_str(), errno);
+		} else dlog("tracker %s: connect transaction failed (errno %d)", host.c_str(), errno);
+	} else dlog("tracker %s: UDP connect failed (errno %d)", host.c_str(), errno);
 	close(fd);
 	return ok;
 }
@@ -1901,6 +1909,40 @@ bool Engine::wait_metadata(const std::string& hex, std::vector<FileInfo>& files,
                            double timeout_s, std::string* error) {
 	Impl& I = impl();
 	double until = now_seconds() + timeout_s;
+#ifdef PLATFORM_PS4
+	// Poll with the PS4 pthread runtime instead of entering libc++'s timed
+	// condition-variable wait from a native console worker. Some firmware /
+	// GoldHEN combinations terminate the process in that timed-wait path.
+	double next_log = now_seconds() + 5;
+	for (;;) {
+		{
+			std::lock_guard<std::mutex> lock(I.mu);
+			auto t = find_locked(lower(hex));
+			if (!t) {
+				if (error) *error = "the torrent was stopped";
+				return false;
+			}
+			if (t->has_meta) {
+				files = t->files;
+				return true;
+			}
+		}
+		if (cancel && cancel->load()) {
+			if (error) *error = "cancelled";
+			return false;
+		}
+		double now = now_seconds();
+		if (now >= until) {
+			if (error) *error = "timed out";
+			return false;
+		}
+		if (now >= next_log) {
+			dlog("torrent startup: still waiting for metadata (%.0f seconds left)", until - now);
+			next_log = now + 5;
+		}
+		usleep(200 * 1000);
+	}
+#else
 	std::unique_lock<std::mutex> lock(I.mu);
 	for (;;) {
 		auto t = find_locked(lower(hex));
@@ -1922,6 +1964,7 @@ bool Engine::wait_metadata(const std::string& hex, std::vector<FileInfo>& files,
 		}
 		I.cv.wait_for(lock, std::chrono::milliseconds(200));
 	}
+#endif
 }
 
 void Engine::select_file(const std::string& hex, int file_idx) {

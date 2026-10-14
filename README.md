@@ -80,6 +80,9 @@ random state from the console torrent path, validates torrent hashes and player
 file reads, cancels blocked reads during player shutdown, and logs each engine
 startup boundary. The PS4 package and host sanitizer suite build successfully;
 the original crash fix remains pending a cold-start retest on the user's console.
+Version 0.36 replaces the PS4 metadata wait's timed condition-variable path
+with bounded polling and reports DNS/socket/connect/announce failure stages for
+UDP trackers. This targets the last recorded stage in the v0.35 crash log.
 
 The upstream PS5 documentation is retained below while features are moved to
 the PS4 platform layer. PS5 installation instructions and artifacts do not
