@@ -68,7 +68,7 @@ a frame in that environment, so the PS4 renderer will use VideoOut (or an
 OpenGNM backend built on it), not Piglet. The existing PS5 HUI renderer is not
 connected to this backend yet.
 
-## Current integration checkpoint (0.33)
+## Current integration checkpoint (0.35)
 
 The PS4 build now compiles the upstream `src/stremio.cpp` addon and stream
 model behind a small C boundary. Direct links enter an on-demand AVPlayer
@@ -91,3 +91,9 @@ metadata, PEX, rolling cache and SHA-1 piece verification are implemented and
 host/build tested. The matrix remains unchecked until cold start, playback,
 seek, cancellation and cache recovery pass on real PS4 hardware. DHT, HTTP
 tracker announces and UPnP are not enabled in the PS4 build yet.
+
+The 0.35 follow-up replaces torrent-engine worker creation with explicit
+pthread-backed workers, removes thread-local RNG state, hardens file callback
+bounds/cancellation, and adds startup stage logging. The PS4-profile engine
+passes host sanitizer tests for startup, cached metadata, cancellation and
+restarts. Cold-start torrent playback remains unverified on physical hardware.

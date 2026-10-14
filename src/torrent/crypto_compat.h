@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <time.h>
+#include <atomic>
 
 /* Small dependency-free SHA-1 for the console build. BitTorrent requires
    SHA-1 for info hashes and piece validation, but OpenOrbis does not ship
@@ -17,4 +18,19 @@ inline unsigned char *SHA1(const unsigned char *data,size_t len,unsigned char ou
         uint32_t a=h0,b=h1,c=h2,d=h3,e=h4;for(int i=0;i<80;++i){uint32_t f,k;if(i<20){f=(b&c)|((~b)&d);k=0x5a827999;}else if(i<40){f=b^c^d;k=0x6ed9eba1;}else if(i<60){f=(b&c)|(b&d)|(c&d);k=0x8f1bbcdc;}else{f=b^c^d;k=0xca62c1d6;}uint32_t t=bt_rol(a,5)+f+e+k+w[i];e=d;d=c;c=bt_rol(b,30);b=a;a=t;}h0+=a;h1+=b;h2+=c;h3+=d;h4+=e;}
     std::free(msg);uint32_t h[5]={h0,h1,h2,h3,h4};for(int i=0;i<5;++i)for(int j=0;j<4;++j)out[i*4+j]=(unsigned char)(h[i]>>(24-j*8));return out;
 }
-inline int RAND_bytes(unsigned char *out,int n){static thread_local uint64_t state=0;if(!state){timespec t{};clock_gettime(CLOCK_MONOTONIC,&t);state=(uint64_t)t.tv_sec*1000000007ull+t.tv_nsec+(uintptr_t)out;}for(int i=0;i<n;++i){state^=state<<13;state^=state>>7;state^=state<<17;out[i]=(unsigned char)state;}return 1;}
+// Peer IDs and tracker transaction IDs are non-secret identifiers. Avoid ELF
+// thread_local here: the console's native threads do not establish musl TLS.
+// Each call gets an independent state; the counter is shared atomically.
+inline int RAND_bytes(unsigned char *out,int n){
+    if(n<0||(!out&&n))return 0;
+    static std::atomic<uint64_t> sequence{0};
+    timespec t{};clock_gettime(CLOCK_MONOTONIC,&t);
+    uint64_t state=sequence.fetch_add(0x9e3779b97f4a7c15ull,std::memory_order_relaxed)
+        ^(uint64_t(t.tv_sec)*1000000000ull+uint64_t(t.tv_nsec));
+    for(int i=0;i<n;){
+        state+=0x9e3779b97f4a7c15ull;uint64_t v=state;
+        v=(v^(v>>30))*0xbf58476d1ce4e5b9ull;v=(v^(v>>27))*0x94d049bb133111ebull;v^=v>>31;
+        for(int j=0;j<8&&i<n;++j,++i)out[i]=static_cast<unsigned char>(v>>(j*8));
+    }
+    return 1;
+}

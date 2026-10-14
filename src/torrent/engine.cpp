@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "worker.h"
 #include "../platform.hpp"
 
 #include <arpa/inet.h>
@@ -129,10 +130,11 @@ void put64(std::string& s, uint64_t v) {
 
 bool hex_to_bytes(const std::string& hex, uint8_t out[20]) {
 	if (hex.size() != 40) return false;
+	auto nibble=[](unsigned char c)->int {if(c>='0'&&c<='9')return c-'0';if(c>='a'&&c<='f')return c-'a'+10;if(c>='A'&&c<='F')return c-'A'+10;return -1;};
 	for (int i = 0; i < 20; i++) {
-		unsigned v;
-		if (sscanf(hex.c_str() + i * 2, "%2x", &v) != 1) return false;
-		out[i] = uint8_t(v);
+		int high=nibble(hex[i*2]),low=nibble(hex[i*2+1]);
+		if(high<0||low<0)return false;
+		out[i]=uint8_t(high*16+low);
 	}
 	return true;
 }
@@ -280,7 +282,7 @@ struct Torrent {
 	std::vector<sockaddr_in> tracker_peers;
 	std::atomic<bool> want_peers{true};
 	std::atomic<bool> idle{false};
-	std::vector<std::thread> tracker_threads;
+	std::vector<Worker> tracker_threads;
 
 	// Metadata
 	bool has_meta = false;
@@ -344,7 +346,7 @@ namespace {
 struct Impl {
 	std::mutex mu;
 	std::condition_variable cv;  // pieces, metadata, stops
-	std::thread net;
+	Worker net;
 	bool running = false, quit = false;
 	std::vector<std::shared_ptr<Torrent>> torrents;
 	std::string data_dir;
@@ -1789,8 +1791,8 @@ void tracker_worker(std::shared_ptr<Torrent> t, int worker) {
 void ensure_running() {
 	Impl& I = impl();
 	if (I.running) return;
-	I.running = true;
 	I.quit = false;
+	dlog("torrent startup: peer ID begin");
 	char id[21];
 	snprintf(id, sizeof(id), "-SP0100-");
 	static const char* al = "0123456789abcdefghijklmnopqrstuvwxyz";
@@ -1799,10 +1801,14 @@ void ensure_running() {
 	std::string pid(id);
 	for (int i = 0; i < 12; i++) pid += al[r[i] % 36];
 	I.peer_id = pid;
+	dlog("torrent startup: peer ID ready");
 #ifndef PLATFORM_PS4
 	if (I.listen_fd < 0) open_listener();
 #endif
-	I.net = std::thread([] { try { net_loop(); } catch (const std::exception& e) { dlog("torrent: network thread exception: %s", e.what()); } catch (...) { dlog("torrent: network thread exception"); } });
+	dlog("torrent startup: network worker begin");
+	I.net = Worker([] { try { dlog("torrent startup: network worker entered"); net_loop(); } catch (const std::exception& e) { dlog("torrent: network thread exception: %s", e.what()); } catch (...) { dlog("torrent: network thread exception"); } });
+	I.running = true;
+	dlog("torrent startup: network worker created");
 }
 
 }  // namespace
@@ -1839,6 +1845,9 @@ void Engine::shutdown() {
 void Engine::start(const std::string& hex_in, const std::vector<std::string>& trackers_in) {
 	Impl& I = impl();
 	std::string hex = lower(hex_in);
+	uint8_t checked_hash[20];
+	if(!hex_to_bytes(hex,checked_hash)){dlog("torrent startup: invalid info hash");return;}
+	dlog("torrent startup: hash validated");
 	std::vector<std::string> trackers;
 	for (auto x : trackers_in) {
 		if (starts_with(x, "tracker:")) x = x.substr(8);
@@ -1851,6 +1860,7 @@ void Engine::start(const std::string& hex_in, const std::vector<std::string>& tr
 		if (std::find(trackers.begin(), trackers.end(), d) == trackers.end()) trackers.push_back(d);
 
 	std::lock_guard<std::mutex> lock(I.mu);
+	dlog("torrent startup: trackers normalized");
 	ensure_running();
 	if (auto t = find_locked(hex)) {
 		std::lock_guard<std::mutex> tl(t->trk_m);
@@ -1873,6 +1883,7 @@ void Engine::start(const std::string& hex_in, const std::vector<std::string>& tr
 	t->trackers = trackers;
 	// Metadata saved from an earlier time: no need to ask the peers.
 	std::string saved;
+	dlog("torrent startup: cached metadata check");
 	if (read_file(I.data_dir + "/torrents/" + hex + ".info", saved)) {
 		unsigned char digest[20];
 		SHA1(reinterpret_cast<const unsigned char*>(saved.data()), saved.size(), digest);
@@ -1880,7 +1891,10 @@ void Engine::start(const std::string& hex_in, const std::vector<std::string>& tr
 	}
 	dlog("torrent %s: starting with %zu trackers", hex.c_str(), trackers.size());
 	I.torrents.push_back(t);
-	for (int w = 0; w < kTrackerThreads; w++) t->tracker_threads.emplace_back([t,w] { try { tracker_worker(t,w); } catch (const std::exception& e) { dlog("torrent: tracker thread exception: %s", e.what()); } catch (...) { dlog("torrent: tracker thread exception"); } });
+	try {
+		for (int w = 0; w < kTrackerThreads; w++) t->tracker_threads.emplace_back([t,w] { try { dlog("torrent startup: tracker worker entered"); tracker_worker(t,w); } catch (const std::exception& e) { dlog("torrent: tracker thread exception: %s", e.what()); } catch (...) { dlog("torrent: tracker thread exception"); } });
+	} catch(...) {t->stopped=true;I.cv.notify_all();throw;}
+	dlog("torrent startup: tracker workers created");
 }
 
 bool Engine::wait_metadata(const std::string& hex, std::vector<FileInfo>& files, const std::atomic<bool>* cancel,
@@ -1975,6 +1989,7 @@ int Engine::read(const std::shared_ptr<Torrent>& t, int reader_id, int file_idx,
                  const std::atomic<bool>* abort) {
 	Impl& I = impl();
 	std::unique_lock<std::mutex> lock(I.mu);
+	if(!t||file_idx<0||size_t(file_idx)>=t->files.size()||pos<0||n<0||(!buf&&n))return -1;
 	const FileInfo& f = t->files[size_t(file_idx)];
 	if (pos >= f.size || n <= 0) return 0;
 	int64_t abs = f.offset + pos;

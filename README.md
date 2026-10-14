@@ -75,6 +75,11 @@ crash: the PS4 profile now limits peer fan-out and memory pressure, enlarges
 the native network pool, disables unused inbound networking and DHT bootstrap,
 avoids an empty-poll edge case, contains worker exceptions, and records startup
 phases in `/data/stremio-torrent-status.log`.
+Version 0.35 adds explicit pthread-backed torrent workers, removes thread-local
+random state from the console torrent path, validates torrent hashes and player
+file reads, cancels blocked reads during player shutdown, and logs each engine
+startup boundary. The PS4 package and host sanitizer suite build successfully;
+the original crash fix remains pending a cold-start retest on the user's console.
 
 The upstream PS5 documentation is retained below while features are moved to
 the PS4 platform layer. PS5 installation instructions and artifacts do not

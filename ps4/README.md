@@ -171,6 +171,15 @@ inbound listener and unused DHT-bootstrap work, bounds torrent memory more
 tightly, and catches worker/setup exceptions. Torrent startup milestones are
 appended to `/data/stremio-torrent-status.log` for hardware diagnosis.
 
+Version 0.35 adds stage-by-stage torrent startup diagnostics, replaces the
+console torrent workers with explicit pthread-backed workers, removes the
+thread-local random state from peer/transaction identifiers, validates hashes
+and file reads at the bridge, and cancels blocked reads before AVPlayer closes.
+The PS4 build and host sanitizer suite pass; cold-start playback still needs
+confirmation on console. The log now distinguishes engine setup, network
+worker creation/entry, tracker worker creation/entry, metadata wait and AVPlayer
+file open.
+
 The output is `dist-ps4/IV0000-BREW00991_00-STREMIOPS4000000.pkg`.
 The current package is a native 1080p VideoOut application using DualShock 4
 navigation and PS4 networking. Firmware 13.02 with GoldHEN 2.4b18.12 is the

@@ -10,3 +10,5 @@ clang-18 -std=c11 -O1 -g -fsanitize=address,undefined -Itests/mocks -I. videoout
 build/tests/playback_test
 clang++-18 -std=c++17 -O1 -g -fsanitize=address,undefined -I../src tests/torrent_crypto_test.cpp -o build/tests/torrent_crypto_test
 build/tests/torrent_crypto_test
+clang++-18 -std=c++17 -DPLATFORM_PS4=1 -O1 -g -fsanitize=address,undefined -ffunction-sections -fdata-sections -I../src -I../third_party ../src/torrent/engine.cpp ../src/torrent/bencode.cpp ../src/util.cpp tests/torrent_startup_test.cpp -Wl,--gc-sections -pthread -o build/tests/torrent_startup_test
+build/tests/torrent_startup_test

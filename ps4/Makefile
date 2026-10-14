@@ -46,7 +46,7 @@ endif
 
 ifeq ($(BUILD_MODE),videoout)
 TITLE       := Stremio PS4
-VERSION     := 0.34
+VERSION     := 0.35
 SOURCE      := videoout/main.c
 OBJECT      := $(OBJDIR)/videoout.o
 EXTRA_OBJECTS := $(OBJDIR)/protocol.o $(OBJDIR)/stremio.o $(OBJDIR)/util.o $(OBJDIR)/subtitles.o $(OBJDIR)/bidi.o $(OBJDIR)/torrent_backend.o $(OBJDIR)/torrent_engine.o $(OBJDIR)/bencode.o $(OBJDIR)/playback.o $(OBJDIR)/video_convert.o
@@ -116,7 +116,7 @@ $(OBJDIR)/bidi.o: $(ROOT)/src/bidi.cpp $(ROOT)/src/bidi.h | $(OBJDIR)
 $(OBJDIR)/torrent_backend.o: videoout/torrent_backend.cpp videoout/torrent_backend.h $(ROOT)/src/torrent/engine.h | $(OBJDIR)
 	$(CCX) $(CXXFLAGS) -std=c++17 -fexceptions -ffunction-sections -fdata-sections -I$(ROOT)/third_party -o $@ $<
 
-$(OBJDIR)/torrent_engine.o: $(ROOT)/src/torrent/engine.cpp $(ROOT)/src/torrent/engine.h $(ROOT)/src/torrent/crypto_compat.h | $(OBJDIR)
+$(OBJDIR)/torrent_engine.o: $(ROOT)/src/torrent/engine.cpp $(ROOT)/src/torrent/engine.h $(ROOT)/src/torrent/crypto_compat.h $(ROOT)/src/torrent/worker.h | $(OBJDIR)
 	$(CCX) $(CXXFLAGS) -std=c++17 -fexceptions -ffunction-sections -fdata-sections -I$(ROOT)/third_party -o $@ $<
 
 $(OBJDIR)/bencode.o: $(ROOT)/src/torrent/bencode.cpp $(ROOT)/src/torrent/bencode.h | $(OBJDIR)

@@ -19,6 +19,7 @@ static struct {
     int (*enable)(void *,uint32_t);int (*disable)(void *,uint32_t);
 } api;
 static void *player;
+static PlaybackFile active_file;
 static PlaybackStatus status;
 static pthread_mutex_t api_mutex=PTHREAD_MUTEX_INITIALIZER,alloc_mutex=PTHREAD_MUTEX_INITIALIZER;
 static pthread_t audio_thread;static int audio_running,audio_started,event_state;
@@ -72,15 +73,18 @@ static void *audio_loop(void *unused){
     if(port>=0){sceAudioOutOutput(port,0);sceAudioOutClose(port);}return 0;
 }
 void playback_close(void){
+    /* Wake a blocked torrent read before joining audio or stopping AVPlayer. */
+    if(active_file.cancel)active_file.cancel(active_file.object);
     __atomic_store_n(&audio_running,0,__ATOMIC_RELEASE);if(audio_started){pthread_join(audio_thread,0);audio_started=0;}
     pthread_mutex_lock(&api_mutex);if(player){api.stop(player);api.close(player);player=0;}status.open=0;pthread_mutex_unlock(&api_mutex);
+    memset(&active_file,0,sizeof(active_file));
 }
 static int playback_open_impl(const char *url,const PlaybackFile *file,int http,int ssl){
     playback_close();memset(&status,0,sizeof(status));resume_ms=0;__atomic_store_n(&event_state,0,__ATOMIC_RELEASE);
     if(!url||(!file&&((strncmp(url,"https://",8)&&strncmp(url,"http://",7))&&strncmp(url,"/data/",6)))){fail("Unsupported media URL",-1);return 0;}
     if(!load_api())return 0;
     Ps4AvInit init={0};init.memory=(Ps4AvMemory){0,mem_alloc,mem_free,texture_alloc,texture_free};init.events.callback=on_event;
-    if(file)init.file=(Ps4AvFile){file->object,file->open,file->close,file->read,file->size};
+    if(file){active_file=*file;init.file=(Ps4AvFile){file->object,file->open,file->close,file->read,file->size};}
     init.priority=0x2bc;init.buffers=4;init.auto_start=true;init.language="eng";
     player=api.init(&init);if(!player){fail("AVPlayer initialization failed",-1);return 0;}
     Ps4AvPost post={0};post.http=(uint32_t)http;post.ssl=(uint32_t)ssl;
